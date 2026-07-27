@@ -125,6 +125,29 @@ def runtime_fingerprint(scene, obj):
     }
 
 
+def take_system_fingerprint(scene):
+    state = scene.take_system
+    return {
+        "schema_version": state.schema_version,
+        "main_take_uuid": state.main_take_uuid,
+        "active_take_uuid": state.active_take_uuid,
+        "active_take_index": state.active_take_index,
+        "active_override_index": state.active_override_index,
+        "takes": tuple(
+            (
+                take.uuid,
+                take.name,
+                take.parent_uuid,
+                take.is_main,
+                take.include_in_render,
+                take.render_output_path,
+                len(take.overrides),
+            )
+            for take in state.takes
+        ),
+    }
+
+
 def require_fingerprint(scene, obj, expected, label):
     actual = runtime_fingerprint(scene, obj)
     require(
@@ -239,6 +262,139 @@ try:
     scene.render.filepath = str(TEST_ROOT / "unsaved.exr")
     scene.render.image_settings.file_format = "OPEN_EXR"
     original = runtime_fingerprint(scene, obj)
+    original_take_system = take_system_fingerprint(scene)
+
+    plan = engine.build_batch_plan(scene)
+    require(
+        [item.take_uuid for item in plan.queued_items]
+        == [take_one_uuid, take_three_uuid],
+        "Read-only plan did not preserve included hierarchy order",
+    )
+    require(
+        plan.queued == 2
+        and plan.ready == 2
+        and plan.can_render
+        and not plan.errors,
+        f"Valid read-only plan was not ready: {plan!r}",
+    )
+    plan_by_uuid = {item.take_uuid: item for item in plan.items}
+    one_plan = plan_by_uuid[take_one_uuid]
+    three_plan = plan_by_uuid[take_three_uuid]
+    require(
+        one_plan.camera_name == camera_one.name
+        and one_plan.camera_source_uuid == take_one_uuid
+        and one_plan.file_format == "OPEN_EXR"
+        and one_plan.resolution_x == 320
+        and one_plan.resolution_y == 999
+        and one_plan.resolution_percentage == 63,
+        f"Take-one preview did not resolve inherited values: {one_plan!r}",
+    )
+    require(
+        three_plan.camera_name == camera_main.name
+        and three_plan.resolution_x == 640
+        and any(
+            issue.code == "OUTPUT_COLLISION"
+            for issue in three_plan.warnings
+        ),
+        f"Collision/camera preview was incomplete: {three_plan!r}",
+    )
+    require(
+        runtime_fingerprint(scene, obj) == original
+        and take_system_fingerprint(scene) == original_take_system,
+        "Building the batch plan mutated live or persistent scene state",
+    )
+
+    # Bulk inclusion is an explicit undoable configuration action, not an
+    # implicit side effect of drawing or planning the queue.
+    original_inclusion = {
+        take.uuid: bool(take.include_in_render)
+        for take in scene.take_system.takes
+    }
+    require(
+        bpy.ops.take_system.set_batch_inclusion(
+            "EXEC_DEFAULT",
+            mode="NONE",
+        )
+        == {"FINISHED"}
+        and engine.build_batch_plan(scene).queued == 0,
+        "Include None did not clear the queue",
+    )
+    require(
+        bpy.ops.take_system.set_batch_inclusion(
+            "EXEC_DEFAULT",
+            mode="ALL",
+        )
+        == {"FINISHED"}
+        and engine.build_batch_plan(scene).queued == len(
+            scene.take_system.takes
+        ),
+        "Include All did not populate the queue",
+    )
+    for take in scene.take_system.takes:
+        take.include_in_render = original_inclusion[take.uuid]
+
+    preflight_result = bpy.ops.take_system.preflight_batch("EXEC_DEFAULT")
+    preflight_report = engine.last_batch_report(scene)
+    require(
+        preflight_result == {"FINISHED"}
+        and isinstance(preflight_report, engine.BatchPreflightReport)
+        and preflight_report.ok
+        and preflight_report.queued == 2,
+        f"User-invoked deep preflight failed: {preflight_report!r}",
+    )
+    require(
+        runtime_fingerprint(scene, obj) == original
+        and take_system_fingerprint(scene) == original_take_system,
+        "Deep batch preflight did not restore the exact starting state",
+    )
+
+    # Lightweight planning reports blockers without applying any take.
+    preview_scene = bpy.data.scenes.new("TS5_Batch_Preview_Errors")
+    try:
+        preview_main = engine.ensure_main_take(preview_scene)
+        preview_main.include_in_render = True
+        preview_scene.collection.objects.link(camera_main)
+        preview_scene.camera = camera_main
+        preview_scene.render.filepath = "//preview/"
+        preview_scene.render.image_settings.file_format = "PNG"
+        relative_plan = engine.build_batch_plan(preview_scene)
+        require(
+            any(
+                issue.code == "OUTPUT"
+                and "Save the .blend" in issue.message
+                for issue in relative_plan.errors
+            ),
+            f"Unsaved relative output was not reported: {relative_plan!r}",
+        )
+        preview_scene.render.filepath = str(TEST_ROOT / "preview.png")
+        preview_scene.camera = None
+        camera_plan = engine.build_batch_plan(preview_scene)
+        require(
+            any(
+                issue.code == "CAMERA"
+                for issue in camera_plan.errors
+            ),
+            f"Missing camera was not reported: {camera_plan!r}",
+        )
+        preview_scene.camera = camera_main
+        format_override = engine._add_override(
+            preview_main,
+            preview_scene,
+            "render.image_settings.file_format",
+        )
+        format_override.prop_type = "ENUM"
+        format_override.value_string = "FFMPEG"
+        format_plan = engine.build_batch_plan(preview_scene)
+        require(
+            any(
+                issue.code == "OUTPUT"
+                and "still-image only" in issue.message
+                for issue in format_plan.errors
+            ),
+            f"Movie output was not rejected: {format_plan!r}",
+        )
+    finally:
+        bpy.data.scenes.remove(preview_scene)
 
     expected_by_uuid = {
         take_one_uuid: {
@@ -320,6 +476,14 @@ try:
         and callback_items[1].output_path == second_output,
         "Sanitized output collision was not resolved deterministically: "
         f"{[item.output_path for item in callback_items]!r}",
+    )
+    require(
+        [item.output_path for item in callback_items]
+        == [
+            item.output_path
+            for item in plan.queued_items
+        ],
+        "Rendered output paths drifted from the read-only preview",
     )
     require(
         all(item.take_uuid != take_two_uuid for item in callback_items),
@@ -414,6 +578,14 @@ try:
         == [take_one_uuid, take_three_uuid],
         f"Batch-render operator seam failed: {operator_result}, "
         f"{operator_items!r}",
+    )
+    operator_report = engine.last_batch_report(scene)
+    require(
+        isinstance(operator_report, engine.BatchRenderReport)
+        and operator_report.ok
+        and operator_report.queued == 2,
+        f"Batch operator did not preserve its runtime result: "
+        f"{operator_report!r}",
     )
     require_fingerprint(
         scene,

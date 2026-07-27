@@ -11,7 +11,7 @@ import re
 import struct
 import uuid as _uuid
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import bpy
 
@@ -138,8 +138,26 @@ _WINDOWS_RESERVED_FILENAMES = {
     *(f"COM{index}" for index in range(1, 10)),
     *(f"LPT{index}" for index in range(1, 10)),
 }
+_STILL_FORMAT_EXTENSIONS = {
+    "AVIF": ".avif",
+    "BMP": ".bmp",
+    "IRIS": ".rgb",
+    "PNG": ".png",
+    "JPEG": ".jpg",
+    "JPEG2000": ".jp2",
+    "TARGA": ".tga",
+    "TARGA_RAW": ".tga",
+    "CINEON": ".cin",
+    "DPX": ".dpx",
+    "OPEN_EXR_MULTILAYER": ".exr",
+    "OPEN_EXR": ".exr",
+    "HDR": ".hdr",
+    "TIFF": ".tif",
+    "WEBP": ".webp",
+}
 _APPLY_DEPTH = 0
 _SCENE_MUTATION_REVISIONS = {}
+_BATCH_RUNTIME_REPORTS = {}
 _GLOBAL_MUTATION_REVISION = 0
 
 
@@ -288,6 +306,107 @@ class BatchQueueEntry:
 
 
 @dataclass(frozen=True)
+class BatchPlanIssue:
+    """One read-only queue-planning diagnostic."""
+
+    severity: str
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class BatchPlanItem:
+    """One take's resolved, non-mutating batch preview."""
+
+    take_uuid: str
+    take_name: str
+    hierarchy_index: int
+    depth: int
+    included: bool
+    explicit_output_path: str = ""
+    raw_output_path: str = ""
+    output_path: str = ""
+    file_path: str = ""
+    camera_name: str = ""
+    camera_source_uuid: str = ""
+    camera_source_name: str = ""
+    file_format: str = ""
+    file_extension: str = ""
+    use_file_extension: bool = False
+    resolution_x: int = 0
+    resolution_y: int = 0
+    resolution_percentage: int = 0
+    issues: tuple = ()
+
+    @property
+    def errors(self):
+        return tuple(
+            issue for issue in self.issues if issue.severity == "ERROR"
+        )
+
+    @property
+    def warnings(self):
+        return tuple(
+            issue for issue in self.issues if issue.severity == "WARNING"
+        )
+
+    @property
+    def ready(self):
+        return self.included and not self.errors
+
+
+@dataclass(frozen=True)
+class BatchPlan:
+    """Read-only batch queue in displayed hierarchy order."""
+
+    items: tuple
+
+    @property
+    def queued_items(self):
+        return tuple(item for item in self.items if item.included)
+
+    @property
+    def queued(self):
+        return len(self.queued_items)
+
+    @property
+    def ready(self):
+        return sum(item.ready for item in self.queued_items)
+
+    @property
+    def errors(self):
+        return tuple(
+            issue
+            for item in self.queued_items
+            for issue in item.errors
+        )
+
+    @property
+    def can_render(self):
+        return bool(self.queued_items) and not self.errors
+
+
+@dataclass
+class BatchPreflightReport:
+    """Result of a user-invoked transactional queue preflight."""
+
+    queued: int = 0
+    error: str = ""
+    restored: bool = False
+    restoration_issues: list = field(default_factory=list)
+    plan: object = None
+
+    @property
+    def ok(self):
+        return (
+            self.queued > 0
+            and not self.error
+            and not self.restoration_issues
+            and self.restored
+        )
+
+
+@dataclass(frozen=True)
 class BatchRenderItem:
     take_uuid: str
     take_name: str
@@ -304,6 +423,7 @@ class BatchRenderReport:
     error: str = ""
     restored: bool = False
     restoration_issues: list = field(default_factory=list)
+    plan: object = None
 
     @property
     def ok(self):
@@ -363,6 +483,19 @@ def global_mutation_revision():
     return _GLOBAL_MUTATION_REVISION
 
 
+def remember_batch_report(scene, report):
+    """Keep the latest preflight/render result outside persistent scene data."""
+
+    _BATCH_RUNTIME_REPORTS[_scene_runtime_key(scene)] = report
+    return report
+
+
+def last_batch_report(scene):
+    """Return the latest runtime-only batch result for ``scene``."""
+
+    return _BATCH_RUNTIME_REPORTS.get(_scene_runtime_key(scene))
+
+
 def _mark_scene_mutated(scene):
     global _GLOBAL_MUTATION_REVISION
     key = _scene_runtime_key(scene)
@@ -385,11 +518,15 @@ def prune_runtime_state(scenes=None):
     for key in tuple(_SCENE_MUTATION_REVISIONS):
         if key not in live_keys:
             _SCENE_MUTATION_REVISIONS.pop(key, None)
+    for key in tuple(_BATCH_RUNTIME_REPORTS):
+        if key not in live_keys:
+            _BATCH_RUNTIME_REPORTS.pop(key, None)
 
 
 def clear_runtime_state():
     global _GLOBAL_MUTATION_REVISION
     _SCENE_MUTATION_REVISIONS.clear()
+    _BATCH_RUNTIME_REPORTS.clear()
     _GLOBAL_MUTATION_REVISION = 0
 
 
@@ -1184,10 +1321,33 @@ def remove_override(scene, take_uuid, override_uuid):
     return snapshot
 
 
-def take_chain(scene, take_uuid=None):
-    """Return the requested ancestry from Main through the requested take."""
+def _validated_stored_main_take(scene):
+    """Return the existing canonical Main without repairing persistent data."""
 
-    main = ensure_main_take(scene)
+    state = scene.take_system
+    main = find_take(scene, state.main_take_uuid)
+    if main is None:
+        raise TakeHierarchyError("The scene has no canonical Main take")
+    if not main.is_main:
+        raise TakeHierarchyError("The stored Main take is not marked as Main")
+    if main.parent_uuid:
+        raise TakeHierarchyError("Main cannot have a parent")
+    if any(
+        take.uuid != main.uuid and take.is_main
+        for take in state.takes
+    ):
+        raise TakeHierarchyError("The scene has more than one Main take")
+    return main
+
+
+def take_chain(scene, take_uuid=None, *, repair=True):
+    """Return Main-to-take ancestry, optionally without repairing scene data."""
+
+    main = (
+        ensure_main_take(scene)
+        if repair
+        else _validated_stored_main_take(scene)
+    )
     requested = take_uuid or scene.take_system.active_take_uuid or main.uuid
     take = find_take(scene, requested)
     if take is None:
@@ -2004,11 +2164,7 @@ def direct_render_profile_groups(scene, take):
     return frozenset(groups)
 
 
-def resolved_camera(scene, take_uuid=None):
-    """Return ``(camera, source_take_uuid)`` for a resolved take camera."""
-
-    requested = take_uuid or scene.take_system.active_take_uuid
-    resolved = resolve_take(scene, requested)
+def _resolved_camera_from_table(scene, resolved):
     for entry in resolved.values():
         override = entry.override
         try:
@@ -2024,6 +2180,14 @@ def resolved_camera(scene, take_uuid=None):
         return scene.camera, ""
     except (AttributeError, ReferenceError) as exc:
         raise MissingReferenceError("The scene camera no longer exists") from exc
+
+
+def resolved_camera(scene, take_uuid=None, *, repair=True):
+    """Return ``(camera, source_take_uuid)`` for a resolved take camera."""
+
+    requested = take_uuid or scene.take_system.active_take_uuid
+    resolved = resolve_take(scene, requested, repair=repair)
+    return _resolved_camera_from_table(scene, resolved)
 
 
 def _add_override(take, target_id, data_path, target_ref_uuid=None):
@@ -3169,11 +3333,11 @@ def _validate_main_target_identity(main_override, take, override):
         )
 
 
-def resolve_take(scene, take_uuid=None):
+def resolve_take(scene, take_uuid=None, *, repair=True):
     """Build the deepest-wins resolved override table for one take."""
 
     resolved = {}
-    chain = take_chain(scene, take_uuid)
+    chain = take_chain(scene, take_uuid, repair=repair)
     main = chain[0]
     main_entries = _validated_take_override_keys(main)
     for depth, take in enumerate(chain):
@@ -3674,8 +3838,7 @@ def _unique_batch_output_path(
     return candidate
 
 
-def resolved_scene_value(scene, take_uuid, data_path):
-    resolved = resolve_take(scene, take_uuid)
+def _resolved_scene_value_from_table(scene, resolved, data_path):
     scene_pointer = _safe_id_pointer(scene)
     for entry in resolved.values():
         override = entry.override
@@ -3691,52 +3854,320 @@ def resolved_scene_value(scene, take_uuid, data_path):
     return read_path_value(scene, data_path)
 
 
-def _build_batch_queue(scene, take_uuids=None):
-    rows = take_hierarchy_rows(scene)
-    by_uuid = {row.take.uuid: row for row in rows}
-    if take_uuids is None:
-        requested_uuids = [
-            row.take.uuid
-            for row in rows
-            if row.take.include_in_render
-        ]
-    else:
-        requested_uuids = list(take_uuids)
-        if len(requested_uuids) != len(set(requested_uuids)):
-            raise TakeHierarchyError(
-                "The batch queue contains the same take more than once"
-            )
+def resolved_scene_value(scene, take_uuid, data_path, *, repair=True):
+    """Read one take-resolved Scene value without applying the take."""
 
-    queue = []
+    resolved = resolve_take(scene, take_uuid, repair=repair)
+    return _resolved_scene_value_from_table(scene, resolved, data_path)
+
+
+def _rendered_batch_output_path(path, file_extension, use_file_extension):
+    """Return the file Blender is expected to write for one render path."""
+
+    rendered_path = str(path)
+    extension = str(file_extension or "")
+    if (
+        use_file_extension
+        and extension
+        and not rendered_path.casefold().endswith(extension.casefold())
+    ):
+        return f"{rendered_path}{extension}"
+    return rendered_path
+
+
+def _batch_plan_error(code, message):
+    return BatchPlanIssue("ERROR", code, str(message))
+
+
+def _batch_plan_warning(code, message):
+    return BatchPlanIssue("WARNING", code, str(message))
+
+
+def _batch_plan_rows(scene, take_uuids):
+    rows = take_hierarchy_rows(scene)
+    indexed_rows = {
+        row.take.uuid: (index, row)
+        for index, row in enumerate(rows)
+    }
+    if take_uuids is None:
+        return tuple(
+            (index, row, bool(row.take.include_in_render))
+            for index, row in enumerate(rows)
+        )
+
+    requested_uuids = list(take_uuids)
+    if len(requested_uuids) != len(set(requested_uuids)):
+        raise TakeHierarchyError(
+            "The batch queue contains the same take more than once"
+        )
+    requested_rows = []
     for take_uuid in requested_uuids:
-        row = by_uuid.get(take_uuid)
-        if row is None:
+        indexed = indexed_rows.get(take_uuid)
+        if indexed is None:
             raise TakeHierarchyError(
                 f"Batch take does not exist: {take_uuid}"
             )
-        if row.issue:
-            raise TakeHierarchyError(
-                f"Take '{row.take.name}' cannot render: {row.issue}"
-            )
-        queue.append(
-            BatchQueueEntry(
-                take_uuid=row.take.uuid,
-                take_name=row.take.name,
-                explicit_output_path=row.take.render_output_path,
-            )
-        )
-    if not queue:
-        raise TakeSystemError("No takes are included in batch rendering")
-    return tuple(queue)
+        hierarchy_index, row = indexed
+        requested_rows.append((hierarchy_index, row, True))
+    return tuple(requested_rows)
 
 
-def _preflight_resolved_take(scene, entry):
-    resolved = resolve_take(scene, entry.take_uuid)
+def _preflight_resolved_table(resolved):
     for resolved_entry in _ordered_resolved_entries(resolved):
         override = resolved_entry.override
         _target_for_override(override)
         decoded_override_value(override)
         split_final_path(override.data_path)
+
+
+def _resolved_batch_value(scene, resolved, data_path):
+    return _resolved_scene_value_from_table(scene, resolved, data_path)
+
+
+def build_batch_plan(scene, take_uuids=None):
+    """Build a non-mutating queue preview in rendered hierarchy order.
+
+    With no explicit UUIDs, every take is returned and each item's ``included``
+    flag mirrors its persistent queue toggle. Explicit UUIDs preserve their
+    caller-supplied order and are all treated as queued, matching
+    :func:`render_take_batch`.
+    """
+
+    planned_items = []
+    for hierarchy_index, row, included in _batch_plan_rows(
+        scene,
+        take_uuids,
+    ):
+        take = row.take
+        issues = []
+        camera_name = ""
+        camera_source_uuid = ""
+        camera_source_name = ""
+        file_format = ""
+        file_extension = ""
+        use_file_extension = False
+        resolution_x = 0
+        resolution_y = 0
+        resolution_percentage = 0
+        raw_output_path = ""
+
+        if row.issue:
+            issues.append(
+                _batch_plan_error(
+                    "HIERARCHY",
+                    f"Take '{take.name}' cannot render: {row.issue}",
+                )
+            )
+        else:
+            resolved = None
+            try:
+                resolved = resolve_take(
+                    scene,
+                    take.uuid,
+                    repair=False,
+                )
+                _preflight_resolved_table(resolved)
+            except Exception as exc:
+                issues.append(
+                    _batch_plan_error(
+                        "OVERRIDES",
+                        _batch_exception_text(exc),
+                    )
+                )
+
+            if resolved is not None:
+                try:
+                    camera, camera_source_uuid = _resolved_camera_from_table(
+                        scene,
+                        resolved,
+                    )
+                    if (
+                        not isinstance(camera, bpy.types.Object)
+                        or camera.type != "CAMERA"
+                    ):
+                        raise TakeSystemError(
+                            f"Take '{take.name}' has no valid Camera object"
+                        )
+                    camera_name = camera.name
+                    source = find_take(scene, camera_source_uuid)
+                    camera_source_name = (
+                        source.name if source is not None else "Live Scene"
+                    )
+                except Exception as exc:
+                    issues.append(
+                        _batch_plan_error(
+                            "CAMERA",
+                            _batch_exception_text(exc),
+                        )
+                    )
+
+                try:
+                    file_format = str(
+                        _resolved_batch_value(
+                            scene,
+                            resolved,
+                            "render.image_settings.file_format",
+                        )
+                    )
+                    if file_format == "FFMPEG":
+                        raise TakeSystemError(
+                            f"Take '{take.name}' uses FFMPEG; batch rendering "
+                            "is still-image only"
+                        )
+                    file_extension = _STILL_FORMAT_EXTENSIONS.get(
+                        file_format,
+                        "",
+                    )
+                    if not file_extension:
+                        raise TakeSystemError(
+                            f"Take '{take.name}' uses unsupported image format "
+                            f"'{file_format or '<missing>'}'"
+                        )
+                    use_file_extension = bool(
+                        _resolved_batch_value(
+                            scene,
+                            resolved,
+                            "render.use_file_extension",
+                        )
+                    )
+                    resolution_x = int(
+                        _resolved_batch_value(
+                            scene,
+                            resolved,
+                            "render.resolution_x",
+                        )
+                    )
+                    resolution_y = int(
+                        _resolved_batch_value(
+                            scene,
+                            resolved,
+                            "render.resolution_y",
+                        )
+                    )
+                    resolution_percentage = int(
+                        _resolved_batch_value(
+                            scene,
+                            resolved,
+                            "render.resolution_percentage",
+                        )
+                    )
+                    base_path = _resolved_batch_value(
+                        scene,
+                        resolved,
+                        "render.filepath",
+                    )
+                    raw_output_path = derive_batch_output_path(
+                        base_path,
+                        take.render_output_path,
+                        take.name,
+                        take.uuid,
+                    )
+                    if (
+                        raw_output_path.startswith("//")
+                        and not bpy.data.filepath
+                    ):
+                        raise TakeSystemError(
+                            "Save the .blend file or use an absolute batch "
+                            f"output path before rendering '{take.name}'"
+                        )
+                except Exception as exc:
+                    issues.append(
+                        _batch_plan_error(
+                            "OUTPUT",
+                            _batch_exception_text(exc),
+                        )
+                    )
+
+        planned_items.append(
+            BatchPlanItem(
+                take_uuid=take.uuid,
+                take_name=take.name,
+                hierarchy_index=hierarchy_index,
+                depth=row.depth,
+                included=included,
+                explicit_output_path=take.render_output_path,
+                raw_output_path=raw_output_path,
+                output_path=raw_output_path,
+                file_path=_rendered_batch_output_path(
+                    raw_output_path,
+                    file_extension,
+                    use_file_extension,
+                ),
+                camera_name=camera_name,
+                camera_source_uuid=camera_source_uuid,
+                camera_source_name=camera_source_name,
+                file_format=file_format,
+                file_extension=file_extension,
+                use_file_extension=use_file_extension,
+                resolution_x=resolution_x,
+                resolution_y=resolution_y,
+                resolution_percentage=resolution_percentage,
+                issues=tuple(issues),
+            )
+        )
+
+    used_outputs = set()
+    finalized_items = []
+    for item in planned_items:
+        if not item.included or not item.raw_output_path:
+            finalized_items.append(item)
+            continue
+        output_path = _unique_batch_output_path(
+            item.raw_output_path,
+            item.take_uuid,
+            used_outputs,
+            file_extension=item.file_extension,
+            use_file_extension=item.use_file_extension,
+        )
+        issues = item.issues
+        if output_path != item.raw_output_path:
+            issues = (
+                *issues,
+                _batch_plan_warning(
+                    "OUTPUT_COLLISION",
+                    "Destination adjusted to avoid another queued output",
+                ),
+            )
+        finalized_items.append(
+            replace(
+                item,
+                output_path=output_path,
+                file_path=_rendered_batch_output_path(
+                    output_path,
+                    item.file_extension,
+                    item.use_file_extension,
+                ),
+                issues=tuple(issues),
+            )
+        )
+    return BatchPlan(tuple(finalized_items))
+
+
+def _build_batch_queue(scene, take_uuids=None):
+    """Compatibility wrapper around the authoritative read-only batch plan."""
+
+    plan = build_batch_plan(scene, take_uuids)
+    if not plan.queued:
+        raise TakeSystemError("No takes are included in batch rendering")
+    if plan.errors:
+        raise TakeSystemError(plan.errors[0].message)
+    return tuple(
+        BatchQueueEntry(
+            take_uuid=item.take_uuid,
+            take_name=item.take_name,
+            explicit_output_path=item.explicit_output_path,
+        )
+        for item in plan.queued_items
+    )
+
+
+def _preflight_resolved_take(scene, entry, *, repair=True):
+    resolved = resolve_take(
+        scene,
+        entry.take_uuid,
+        repair=repair,
+    )
+    _preflight_resolved_table(resolved)
 
 
 def _validate_renderable_camera(scene, take_name):
@@ -3890,8 +4321,12 @@ def _preflight_batch_apply(
                 _write_journal=journal,
             )
             _validate_renderable_camera(scene, queue_entry.take_name)
-            _validate_still_format(scene, queue_entry.take_name)
+            file_format = _validate_still_format(
+                scene,
+                queue_entry.take_name,
+            )
             output_metadata[queue_entry.take_uuid] = (
+                file_format,
                 scene.render.file_extension,
                 bool(scene.render.use_file_extension),
             )
@@ -3909,6 +4344,86 @@ def _preflight_batch_apply(
     return failure, restore_issues, output_metadata
 
 
+def _batch_queue_from_plan(plan):
+    return tuple(
+        BatchQueueEntry(
+            take_uuid=item.take_uuid,
+            take_name=item.take_name,
+            explicit_output_path=item.explicit_output_path,
+        )
+        for item in plan.queued_items
+    )
+
+
+def _validate_batch_plan_metadata(plan, output_metadata):
+    """Ensure the read-only preview matches Blender's applied render metadata."""
+
+    for item in plan.queued_items:
+        actual = output_metadata.get(item.take_uuid)
+        if actual is None:
+            raise TakeSystemError(
+                f"Preflight produced no output metadata for '{item.take_name}'"
+            )
+        actual_format, actual_extension, actual_use_extension = actual
+        expected = (
+            item.file_format,
+            item.file_extension,
+            item.use_file_extension,
+        )
+        if actual != expected:
+            raise TakeSystemError(
+                f"Render metadata changed after planning '{item.take_name}'; "
+                "refresh the queue before rendering "
+                f"(planned {expected!r}, applied {actual!r})"
+            )
+
+
+def preflight_take_batch(scene, take_uuids=None):
+    """Deeply apply and restore a planned queue without rendering files."""
+
+    ensure_main_take(scene)
+    report = BatchPreflightReport()
+    try:
+        plan = build_batch_plan(scene, take_uuids)
+    except Exception as exc:
+        report.error = _batch_exception_text(exc)
+        report.restored = True
+        return report
+    report.plan = plan
+    report.queued = plan.queued
+    if not plan.queued:
+        report.error = "No takes are included in batch rendering"
+        report.restored = True
+        return report
+    if plan.errors:
+        report.error = plan.errors[0].message
+        report.restored = True
+        return report
+
+    state = scene.take_system
+    original_active_uuid = state.active_take_uuid
+    selected = selected_take(scene)
+    original_selected_uuid = selected.uuid if selected is not None else ""
+    original_override_index = state.active_override_index
+    failure, restore_issues, output_metadata = _preflight_batch_apply(
+        scene,
+        _batch_queue_from_plan(plan),
+        original_active_uuid,
+        original_selected_uuid,
+        original_override_index,
+    )
+    if failure is not None:
+        report.error = _batch_exception_text(failure)
+    report.restoration_issues.extend(restore_issues)
+    report.restored = not report.restoration_issues
+    if not report.error and report.restored:
+        try:
+            _validate_batch_plan_metadata(plan, output_metadata)
+        except Exception as exc:
+            report.error = _batch_exception_text(exc)
+    return report
+
+
 def render_take_batch(scene, render_callback, take_uuids=None):
     """Synchronously render queued takes and restore the exact live state.
 
@@ -3920,40 +4435,22 @@ def render_take_batch(scene, render_callback, take_uuids=None):
 
     if not callable(render_callback):
         raise TakeSystemError("A synchronous render callback is required")
-    ensure_main_take(scene)
-    queue = _build_batch_queue(scene, take_uuids)
-    report = BatchRenderReport(queued=len(queue))
-
+    report = BatchRenderReport()
     try:
-        for entry in queue:
-            _preflight_resolved_take(scene, entry)
+        ensure_main_take(scene)
+        plan = build_batch_plan(scene, take_uuids)
     except Exception as exc:
         report.error = _batch_exception_text(exc)
         raise BatchRenderError(report) from exc
-
-    raw_outputs = {}
-    try:
-        for entry in queue:
-            base_path = resolved_scene_value(
-                scene,
-                entry.take_uuid,
-                "render.filepath",
-            )
-            output_path = derive_batch_output_path(
-                base_path,
-                entry.explicit_output_path,
-                entry.take_name,
-                entry.take_uuid,
-            )
-            if output_path.startswith("//") and not bpy.data.filepath:
-                raise TakeSystemError(
-                    "Save the .blend file or use an absolute batch output "
-                    "path before rendering"
-                )
-            raw_outputs[entry.take_uuid] = output_path
-    except Exception as exc:
-        report.error = _batch_exception_text(exc)
-        raise BatchRenderError(report) from exc
+    report.plan = plan
+    report.queued = plan.queued
+    if not plan.queued:
+        report.error = "No takes are included in batch rendering"
+        raise BatchRenderError(report)
+    if plan.errors:
+        report.error = plan.errors[0].message
+        raise BatchRenderError(report)
+    queue = _batch_queue_from_plan(plan)
 
     state = scene.take_system
     original_active_uuid = state.active_take_uuid
@@ -3979,20 +4476,17 @@ def render_take_batch(scene, render_callback, take_uuids=None):
         report.restored = not report.restoration_issues
         raise BatchRenderError(report) from failure
 
-    used_outputs = set()
-    planned_outputs = {}
-    for entry in queue:
-        file_extension, use_file_extension = output_metadata.get(
-            entry.take_uuid,
-            ("", False),
-        )
-        planned_outputs[entry.take_uuid] = _unique_batch_output_path(
-            raw_outputs[entry.take_uuid],
-            entry.take_uuid,
-            used_outputs,
-            file_extension=file_extension,
-            use_file_extension=use_file_extension,
-        )
+    try:
+        _validate_batch_plan_metadata(plan, output_metadata)
+    except Exception as exc:
+        report.error = _batch_exception_text(exc)
+        report.restored = True
+        raise BatchRenderError(report) from exc
+
+    planned_outputs = {
+        item.take_uuid: item.output_path
+        for item in plan.queued_items
+    }
 
     journal = []
     mandatory = _mandatory_batch_snapshots(scene)

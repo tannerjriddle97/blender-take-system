@@ -434,6 +434,8 @@ try:
         operators.TS_OT_edit_render_profile,
         operators.TS_OT_capture_render_settings,
         operators.TS_OT_clear_render_settings,
+        operators.TS_OT_set_batch_inclusion,
+        operators.TS_OT_preflight_batch,
         operators.TS_OT_render_included_takes,
     ):
         require(

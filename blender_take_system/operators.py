@@ -1588,14 +1588,59 @@ def _render_still(scene, _item):
     )
 
 
-class TS_OT_render_included_takes(bpy.types.Operator):
-    """Synchronously render every take whose include toggle is enabled."""
+class TS_OT_set_batch_inclusion(bpy.types.Operator):
+    """Include or exclude every take from the still-render queue."""
 
-    bl_idname = "take_system.render_included_takes"
-    bl_label = "Render Included Takes"
+    bl_idname = "take_system.set_batch_inclusion"
+    bl_label = "Set Batch Inclusion"
+    bl_description = "Include or exclude every take in the batch render queue"
+    bl_options = {"REGISTER", "UNDO"}
+
+    mode: EnumProperty(
+        name="Mode",
+        items=(
+            ("ALL", "Include All", "Include every take in the queue"),
+            ("NONE", "Include None", "Exclude every take from the queue"),
+        ),
+        default="ALL",
+        options={"HIDDEN"},
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return _poll_editable_scene(cls, context)
+
+    @classmethod
+    def description(cls, _context, properties):
+        if properties.mode == "NONE":
+            return "Exclude every take from the batch render queue"
+        return "Include every take in the batch render queue"
+
+    def execute(self, context):
+        include = self.mode == "ALL"
+        changed = 0
+        for take in context.scene.take_system.takes:
+            if bool(take.include_in_render) != include:
+                take.include_in_render = include
+                changed += 1
+        self.report(
+            {"INFO"},
+            (
+                f"{'Included' if include else 'Excluded'} "
+                f"{changed} take(s)"
+            ),
+        )
+        return {"FINISHED"}
+
+
+class TS_OT_preflight_batch(bpy.types.Operator):
+    """Apply and restore the complete queue without writing render files."""
+
+    bl_idname = "take_system.preflight_batch"
+    bl_label = "Preflight Batch"
     bl_description = (
-        "Render included takes as stills, then restore the exact live scene "
-        "state; output files already written cannot be undone"
+        "Deeply validate every included take by applying the complete queue, "
+        "then restore the exact live scene state without rendering files"
     )
     bl_options = {"REGISTER"}
 
@@ -1621,11 +1666,147 @@ class TS_OT_render_included_takes(bpy.types.Operator):
         scene = context.scene
         if not _prepare_recording_for_internal_change(self, scene):
             return {"CANCELLED"}
+        with recent.suspend_tracking():
+            report = engine.preflight_take_batch(scene)
+        engine.remember_batch_report(scene, report)
+        recording.handle_internal_state_change(scene)
+        if not report.ok:
+            suffix = (
+                "; scene restoration needs attention"
+                if report.restoration_issues
+                else ""
+            )
+            self.report(
+                {"ERROR"},
+                f"Batch preflight failed: {report.error or 'Unknown error'}"
+                f"{suffix}",
+            )
+            return {"CANCELLED"}
+        self.report(
+            {"INFO"},
+            f"Preflight passed for {report.queued} take(s); scene restored",
+        )
+        return {"FINISHED"}
+
+
+class TS_OT_render_included_takes(bpy.types.Operator):
+    """Synchronously render every take whose include toggle is enabled."""
+
+    bl_idname = "take_system.render_included_takes"
+    bl_label = "Review Batch Render"
+    bl_description = (
+        "Review final still-image destinations, then render every included "
+        "take and restore the exact live scene state"
+    )
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        if not _poll_editable_scene(cls, context):
+            return False
+        if not any(
+            take.include_in_render
+            for take in context.scene.take_system.takes
+        ):
+            cls.poll_message_set("No takes are included in batch rendering")
+            return False
+        try:
+            if bpy.app.is_job_running("RENDER"):
+                cls.poll_message_set("Blender is already rendering")
+                return False
+        except (AttributeError, TypeError):
+            pass
+        return True
+
+    def invoke(self, context, _event):
+        try:
+            plan = engine.build_batch_plan(context.scene)
+        except engine.TakeSystemError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        if not plan.queued:
+            self.report({"ERROR"}, "No takes are included in batch rendering")
+            return {"CANCELLED"}
+        if plan.errors:
+            self.report(
+                {"ERROR"},
+                f"Resolve queue errors before rendering: "
+                f"{plan.errors[0].message}",
+            )
+            return {"CANCELLED"}
+        confirm_text = f"Render {plan.queued} Take"
+        if plan.queued != 1:
+            confirm_text += "s"
+        try:
+            return context.window_manager.invoke_props_dialog(
+                self,
+                width=680,
+                title="Review Batch Render",
+                confirm_text=confirm_text,
+            )
+        except TypeError:
+            return context.window_manager.invoke_props_dialog(
+                self,
+                width=680,
+            )
+
+    def draw(self, context):
+        layout = self.layout
+        try:
+            plan = engine.build_batch_plan(context.scene)
+        except engine.TakeSystemError as exc:
+            layout.label(text=f"Queue error: {exc}", icon="ERROR")
+            return
+        layout.label(
+            text=f"{plan.queued} still render(s), in hierarchy order",
+            icon="RENDER_STILL",
+        )
+        for item in plan.queued_items:
+            box = layout.box()
+            header = box.row(align=True)
+            header.label(text=item.take_name, icon="CHECKMARK")
+            header.label(
+                text=(
+                    f"{item.file_format} | {item.resolution_x} x "
+                    f"{item.resolution_y} @ {item.resolution_percentage}%"
+                ),
+            )
+            box.label(
+                text=f"Camera: {item.camera_name}",
+                icon="CAMERA_DATA",
+            )
+            folder, filename = os.path.split(item.file_path)
+            box.label(
+                text=f"File: {filename or item.file_path}",
+                icon="IMAGE_DATA",
+            )
+            if folder:
+                box.label(
+                    text=f"Folder: {folder}",
+                    icon="FILE_FOLDER",
+                )
+            for issue in item.warnings:
+                box.label(text=issue.message, icon="INFO")
+        warning = layout.box()
+        warning.label(
+            text="Completed files cannot be undone if a later take fails.",
+            icon="INFO",
+        )
+        warning.label(
+            text="The applied/selected take and live scene values are restored.",
+            icon="FILE_REFRESH",
+        )
+
+    def execute(self, context):
+        scene = context.scene
+        if not _prepare_recording_for_internal_change(self, scene):
+            return {"CANCELLED"}
         try:
             with recent.suspend_tracking():
                 report = engine.render_take_batch(scene, _render_still)
         except engine.BatchRenderError as exc:
             report = exc.report
+            engine.remember_batch_report(scene, report)
             recording.handle_internal_state_change(scene)
             suffix = (
                 f"; {len(report.rendered)} file(s) were already written"
@@ -1637,9 +1818,17 @@ class TS_OT_render_included_takes(bpy.types.Operator):
             self.report({"ERROR"}, f"{exc}{suffix}")
             return {"CANCELLED"}
         except engine.TakeSystemError as exc:
+            engine.remember_batch_report(
+                scene,
+                engine.BatchRenderReport(
+                    error=str(exc),
+                    restored=False,
+                ),
+            )
             recording.handle_internal_state_change(scene)
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
+        engine.remember_batch_report(scene, report)
         recording.handle_internal_state_change(scene)
         self.report(
             {"INFO"},
@@ -1804,6 +1993,8 @@ CLASSES = (
     TS_OT_edit_render_profile,
     TS_OT_capture_render_settings,
     TS_OT_clear_render_settings,
+    TS_OT_set_batch_inclusion,
+    TS_OT_preflight_batch,
     TS_OT_render_included_takes,
     TS_OT_capture_button_override,
     TS_OT_capture_path_override,

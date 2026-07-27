@@ -158,11 +158,25 @@ render settings remain inherited and visible in the override inspector.
 
 ### Transactional batch still rendering
 
-Expand **Batch Render Takes**. For each take, select its row and set **Include
-in Batch** plus the optional **Output Override**, then press **Render Included
-Takes**. Included takes run synchronously in displayed hierarchy order. This is
-a still-image queue: Blender's UI remains occupied until it finishes, animation
-rendering is not included, and an `FFMPEG` output is rejected.
+Expand **Batch Render Takes**. The panel is a hierarchy-ordered queue: every
+take shows its inclusion toggle, resolved camera, image format and resolution,
+final file destination, optional **Output Override**, and current readiness.
+Use **Include All** or **Include None** for bulk setup. Excluded takes remain
+visible so their configuration can be reviewed before they join the queue.
+
+The ordinary queue preview is read-only. **Ready** means the stored hierarchy,
+override references, camera, still-image format, output path, and collisions
+passed lightweight validation without applying a take. Press **Preflight N
+Takes** for the deeper transactional check: the add-on strictly applies every
+queued take, validates Blender's applied render metadata, and restores the live
+scene without writing files.
+
+Press **Review & Render N Takes...** to inspect every final destination in a
+confirmation dialog before output begins. Included takes then run synchronously
+in displayed hierarchy order. Blender's UI remains occupied until the still
+queue finishes; animation rendering is not included. The panel keeps the latest
+runtime-only preflight or render result, including files already written and
+restoration status. This status is not saved into the `.blend`.
 
 Output paths are planned before the first render:
 
@@ -359,12 +373,13 @@ validated.
     Camera object in the dialog.
 11. Press the applied row's output icon or **Edit Render Profile...**, enable
     only the render groups that differ on that take, edit them, and Apply.
-12. Set **Include in Batch** for each desired take. Set **Batch Output
-    Override** in the profile's Output group or the Batch Render panel when a
-    take should not derive its destination from Scene Output.
-13. Save the `.blend` when using `//` paths, then press **Render Included
-    Takes**. The batch returns to the exact pre-render live scene and manager
-    state after all included stills finish.
+12. In **Batch Render Takes**, set each take's queue toggle and optional
+    **Output Override**. Confirm the resolved camera, final file, and **Ready**
+    status beside every included take.
+13. Save the `.blend` when using `//` paths. Optionally press **Preflight N
+    Takes**, then press **Review & Render N Takes...**, review the final
+    destinations, and confirm. The batch returns to the exact pre-render live
+    scene and manager state after all included stills finish.
 
 For the Phase 6 workflow, replace steps 2–4 or step 8 with **Start Recording**,
 make one or more supported edits, wait for the status to report the capture, and
@@ -433,6 +448,10 @@ escaped node and modifier names.
 - Feature-detected, portable render-setting presets stored through ordinary
   deepest-child-wins Scene overrides
 - Per-take batch inclusion and explicit-or-derived collision-safe output paths
+- Read-only hierarchy-ordered batch planning with resolved camera, format,
+  resolution, final-file, collision, and readiness diagnostics
+- Explicit deep preflight, deliberate review/confirmation, bulk inclusion, and
+  runtime-only last-result reporting
 - Synchronous still rendering with whole-queue preflight, strict take apply,
   valid-camera/format checks, and missing output-directory creation
 - Transactional restoration of take-written live values, dependent render
@@ -570,6 +589,10 @@ Blender automatically:
 & 'C:\Codex_Playpen\blender-take-system\tests\run_take_system_tests.ps1' `
   -BlenderPath 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe'
 
+# Optional interactive draw smoke tests at wide and ~310 px Properties widths,
+# including the Review Batch Render dialog:
+& 'C:\Codex_Playpen\blender-take-system\tests\run_take_system_gui_tests.ps1'
+
 # Or run individual lanes:
 & 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' `
   --background --factory-startup --python-exit-code 1 `
@@ -620,4 +643,6 @@ failures. The
 packaged-install lane independently builds a multi-level hierarchy, verifies
 deepest-wins resolution, round-trips per-View-Layer collection and Phase 5
 state, verifies redundant-write suppression, and checks broken paths fail
-atomically from the installed ZIP.
+atomically from the installed ZIP. The optional GUI runner launches temporary
+hidden Blender windows, captures wide and narrow Properties-editor layouts, and
+opens the non-rendering review dialog to catch interactive draw regressions.

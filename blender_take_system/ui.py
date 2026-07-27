@@ -1,5 +1,7 @@
 """Dockable Blender UI for browsing and editing scene-local takes."""
 
+import os
+
 import bpy
 
 from . import engine, recent, recording
@@ -420,6 +422,7 @@ class TS_PT_take_scene_settings(bpy.types.Panel):
             camera, source_uuid = engine.resolved_camera(
                 scene,
                 selected.uuid,
+                repair=False,
             )
             source = engine.find_take(scene, source_uuid)
             camera_box.label(
@@ -469,26 +472,31 @@ class TS_PT_take_scene_settings(bpy.types.Panel):
                 scene,
                 selected.uuid,
                 "render.engine",
+                repair=False,
             )
             resolution_x = engine.resolved_scene_value(
                 scene,
                 selected.uuid,
                 "render.resolution_x",
+                repair=False,
             )
             resolution_y = engine.resolved_scene_value(
                 scene,
                 selected.uuid,
                 "render.resolution_y",
+                repair=False,
             )
             resolution_percentage = engine.resolved_scene_value(
                 scene,
                 selected.uuid,
                 "render.resolution_percentage",
+                repair=False,
             )
             file_format = engine.resolved_scene_value(
                 scene,
                 selected.uuid,
                 "render.image_settings.file_format",
+                repair=False,
             )
             render_box.label(
                 text=(
@@ -550,7 +558,7 @@ class TS_PT_take_scene_settings(bpy.types.Panel):
 
 
 class TS_PT_take_batch_render(bpy.types.Panel):
-    """Functional synchronous still-render queue for included takes."""
+    """Read-only queue preview and deliberate synchronous render actions."""
 
     bl_idname = "SCENE_PT_take_batch_render"
     bl_label = "Batch Render Takes"
@@ -572,48 +580,246 @@ class TS_PT_take_batch_render(bpy.types.Panel):
         layout = self.layout
         scene = context.scene
         takes = scene.take_system.takes
-        selected = engine.selected_take(scene)
-        included = sum(take.include_in_render for take in takes)
+        is_narrow = getattr(context.region, "width", 0) < 420
+        try:
+            plan = engine.build_batch_plan(scene)
+        except (
+            engine.TakeSystemError,
+            AttributeError,
+            ReferenceError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            layout.label(text=f"Queue error: {exc}", icon="ERROR")
+            return
+
         layout.label(
-            text=f"Included: {included} of {len(takes)}",
+            text=f"Queue: {plan.queued} of {len(takes)} takes",
             icon="RENDER_STILL",
         )
-        if selected is not None:
-            selected_box = layout.box()
-            selected_box.label(
-                text=f"Selected: {selected.name}",
-                icon="RESTRICT_SELECT_OFF",
+        bulk = layout.row(align=True)
+        include_all = bulk.operator(
+            "take_system.set_batch_inclusion",
+            text="Include All",
+        )
+        include_all.mode = "ALL"
+        include_none = bulk.operator(
+            "take_system.set_batch_inclusion",
+            text="Include None",
+        )
+        include_none.mode = "NONE"
+
+        for item in plan.items:
+            take = engine.find_take(scene, item.take_uuid)
+            if take is None:
+                continue
+            box = layout.box()
+            header = box.row(align=True)
+            header.prop(take, "include_in_render", text="")
+            header.label(
+                text=f"{'    ' * item.depth}{item.take_name}",
+                icon=(
+                    "ERROR"
+                    if item.included and item.errors
+                    else "CHECKMARK"
+                    if item.ready
+                    else "CHECKBOX_DEHLT"
+                ),
             )
-            selected_box.prop(
-                selected,
-                "include_in_render",
-                text="Include in Batch",
+            header.label(
+                text=(
+                    "Needs attention"
+                    if item.included and item.errors
+                    else "Ready"
+                    if item.ready
+                    else "Excluded"
+                ),
             )
-            selected_box.prop(
-                selected,
-                "render_output_path",
-                text="Output Override",
+
+            details = box.column(align=True)
+            camera_text = (
+                f"Camera: {item.camera_name}"
+                if item.camera_name
+                else "Camera: <invalid>"
             )
-            selected_box.label(
-                text="Blank output derives a unique name from Scene Output.",
+            if item.camera_name and item.camera_source_name:
+                camera_text += f" (from {item.camera_source_name})"
+            details.label(text=camera_text, icon="CAMERA_DATA")
+            if item.file_format:
+                details.label(
+                    text=(
+                        f"{item.file_format} | {item.resolution_x} x "
+                        f"{item.resolution_y} @ "
+                        f"{item.resolution_percentage}%"
+                    ),
+                    icon="IMAGE_DATA",
+                )
+            if item.file_path:
+                folder, filename = os.path.split(item.file_path)
+                details.label(
+                    text=f"File: {filename or item.file_path}",
+                    icon="IMAGE_DATA",
+                )
+                if folder:
+                    details.label(
+                        text=f"Folder: {folder}",
+                        icon="FILE_FOLDER",
+                    )
+            else:
+                details.label(text="File: <unresolved>", icon="ERROR")
+            if is_narrow:
+                details.label(text="Output Override")
+                details.prop(take, "render_output_path", text="")
+            else:
+                details.prop(
+                    take,
+                    "render_output_path",
+                    text="Output Override",
+                )
+            for issue in item.issues:
+                issue_row = box.row()
+                issue_row.alert = (
+                    item.included and issue.severity == "ERROR"
+                )
+                issue_row.label(
+                    text=issue.message,
+                    icon=(
+                        "ERROR"
+                        if issue.severity == "ERROR"
+                        else "INFO"
+                    ),
+                )
+
+        actions = layout.column(align=True)
+        actions_enabled = plan.can_render
+        preflight_row = actions.row()
+        preflight_row.enabled = actions_enabled
+        preflight_label = f"Preflight {plan.queued} Take"
+        if plan.queued != 1:
+            preflight_label += "s"
+        preflight_row.operator(
+            "take_system.preflight_batch",
+            text=preflight_label,
+            icon="CHECKMARK",
+        )
+        render_row = actions.row()
+        render_row.enabled = actions_enabled
+        render_row.scale_y = 1.4
+        render_label = f"Review & Render {plan.queued} Take"
+        if plan.queued != 1:
+            render_label += "s"
+        render_label += "..."
+        render_row.operator(
+            "take_system.render_included_takes",
+            text=render_label,
+            icon="RENDER_STILL",
+        )
+        if not plan.queued:
+            layout.label(
+                text="Include at least one take to build the queue.",
+                icon="INFO",
+            )
+        elif plan.errors:
+            layout.label(
+                text=(
+                    f"Resolve {len(plan.errors)} queue error(s) before "
+                    "preflight or rendering."
+                ),
+                icon="ERROR",
+            )
+        else:
+            layout.label(
+                text="Preflight writes no files.",
+                icon="INFO",
+            )
+            layout.label(
+                text="Rendering runs synchronously.",
                 icon="INFO",
             )
 
-        render_row = layout.row()
-        render_row.scale_y = 1.5
-        render_row.operator(
-            "take_system.render_included_takes",
-            text="Render Included Takes",
-            icon="RENDER_STILL",
-        )
-        layout.label(
-            text="Synchronous still renders; live scene state is restored.",
-            icon="FILE_REFRESH",
-        )
-        layout.label(
-            text="Files written before an error cannot be undone.",
-            icon="ERROR",
-        )
+        report = engine.last_batch_report(scene)
+        if report is not None:
+            result = layout.box()
+            result.label(text="Last Batch Result", icon="INFO")
+            if isinstance(report, engine.BatchPreflightReport):
+                if report.ok:
+                    result.label(
+                        text=(
+                            f"Preflight passed for {report.queued} take(s); "
+                            "scene restored."
+                        ),
+                        icon="CHECKMARK",
+                    )
+                else:
+                    error_row = result.row()
+                    error_row.alert = True
+                    error_row.label(
+                        text=f"Preflight failed: {report.error}",
+                        icon="ERROR",
+                    )
+                    if report.restored:
+                        result.label(
+                            text="Live scene state restored.",
+                            icon="FILE_REFRESH",
+                        )
+            elif isinstance(report, engine.BatchRenderReport):
+                if report.ok:
+                    result.label(
+                        text=(
+                            f"Rendered {len(report.rendered)} of "
+                            f"{report.queued}; scene restored."
+                        ),
+                        icon="CHECKMARK",
+                    )
+                else:
+                    error_row = result.row()
+                    error_row.alert = True
+                    error_row.label(
+                        text=(
+                            f"Render stopped"
+                            f"{f' at {report.failed_take_name}' if report.failed_take_name else ''}: "
+                            f"{report.error or 'Unknown error'}"
+                        ),
+                        icon="ERROR",
+                    )
+                if report.rendered:
+                    result.label(
+                        text=f"Files written: {len(report.rendered)}",
+                        icon="FILE_FOLDER",
+                    )
+                    plan_by_uuid = {
+                        item.take_uuid: item
+                        for item in (
+                            report.plan.items
+                            if report.plan is not None
+                            else ()
+                        )
+                    }
+                    for rendered in report.rendered[:3]:
+                        planned = plan_by_uuid.get(rendered.take_uuid)
+                        result.label(
+                            text=(
+                                planned.file_path
+                                if planned is not None
+                                else rendered.output_path
+                            ),
+                        )
+                    if len(report.rendered) > 3:
+                        result.label(
+                            text=f"...and {len(report.rendered) - 3} more",
+                        )
+                if report.restored and not report.ok:
+                    result.label(
+                        text="Live scene state restored.",
+                        icon="FILE_REFRESH",
+                    )
+            if getattr(report, "restoration_issues", None):
+                restoration_row = result.row()
+                restoration_row.alert = True
+                restoration_row.label(
+                    text="Scene restoration needs attention.",
+                    icon="ERROR",
+                )
 
 
 class TS_PT_take_overrides(bpy.types.Panel):
