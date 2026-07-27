@@ -55,8 +55,10 @@ require(module.bl_info["blender"] == (4, 0, 0), "Minimum version mismatch")
 release_types = (
     module.ui.TS_UL_takes,
     module.ui.TS_UL_overrides,
+    module.ui.TS_PT_take_master_render,
     module.ui.TS_PT_take_manager,
     module.ui.TS_PT_take_scene_settings,
+    module.ui.TS_PT_take_capture_changes,
     module.ui.TS_PT_take_batch_render,
     module.ui.TS_PT_take_overrides,
     module.operators.TS_OT_apply_selected_take,
@@ -90,9 +92,13 @@ require(
     "Take Manager is not registered in Properties > Scene",
 )
 require(
-    module.ui.TS_PT_take_overrides.bl_parent_id
-    == module.ui.TS_PT_take_manager.bl_idname,
-    "Override inspector is not nested under the Take Manager",
+    module.ui.TS_PT_take_master_render.bl_order
+    < module.ui.TS_PT_take_manager.bl_order
+    < module.ui.TS_PT_take_scene_settings.bl_order
+    < module.ui.TS_PT_take_capture_changes.bl_order
+    < module.ui.TS_PT_take_batch_render.bl_order
+    < module.ui.TS_PT_take_overrides.bl_order,
+    "Installed panels do not follow the intended task hierarchy",
 )
 
 # Blender may reload only the package module during an in-place ZIP update.

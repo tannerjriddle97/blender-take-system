@@ -395,8 +395,10 @@ try:
     for ui_class in (
         ui.TS_UL_takes,
         ui.TS_UL_overrides,
+        ui.TS_PT_take_master_render,
         ui.TS_PT_take_manager,
         ui.TS_PT_take_scene_settings,
+        ui.TS_PT_take_capture_changes,
         ui.TS_PT_take_batch_render,
         ui.TS_PT_take_overrides,
     ):
@@ -411,17 +413,24 @@ try:
         "Take Manager is not registered in Properties > Scene",
     )
     require(
-        ui.TS_PT_take_overrides.bl_parent_id
-        == ui.TS_PT_take_manager.bl_idname,
-        "Overrides panel is not parented to the Take Manager",
+        ui.TS_PT_take_master_render.bl_order
+        < ui.TS_PT_take_manager.bl_order
+        < ui.TS_PT_take_scene_settings.bl_order
+        < ui.TS_PT_take_capture_changes.bl_order
+        < ui.TS_PT_take_batch_render.bl_order
+        < ui.TS_PT_take_overrides.bl_order,
+        "Take System panels do not follow the intended task hierarchy",
     )
-    require(
-        ui.TS_PT_take_scene_settings.bl_parent_id
-        == ui.TS_PT_take_manager.bl_idname
-        and ui.TS_PT_take_batch_render.bl_parent_id
-        == ui.TS_PT_take_manager.bl_idname,
-        "Phase 5 panels are not parented to the Take Manager",
-    )
+    for panel in (
+        ui.TS_PT_take_scene_settings,
+        ui.TS_PT_take_capture_changes,
+        ui.TS_PT_take_batch_render,
+        ui.TS_PT_take_overrides,
+    ):
+        require(
+            "DEFAULT_CLOSED" in panel.bl_options,
+            f"{panel.__name__} does not use progressive disclosure",
+        )
     for operator_class in (
         operators.TS_OT_apply_selected_take,
         operators.TS_OT_duplicate_take,

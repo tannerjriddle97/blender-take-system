@@ -124,7 +124,7 @@ try:
 
     for registered_class in (
         operators.TS_OT_capture_recent_action,
-        ui.TS_PT_take_manager,
+        ui.TS_PT_take_capture_changes,
     ):
         require(
             registered_class.is_registered,
@@ -138,10 +138,10 @@ try:
     )
     require(
         "take_system.capture_recent_action"
-        in ui.TS_PT_take_manager.draw.__code__.co_consts
+        in ui.TS_PT_take_capture_changes.draw.__code__.co_consts
         and "action_summary"
-        in ui.TS_PT_take_manager.draw.__code__.co_names,
-        "Take Manager does not expose the recent-action status and operator",
+        in ui.TS_PT_take_capture_changes.draw.__code__.co_names,
+        "Capture Changes does not expose recent-action status and capture",
     )
 
     clear_scene()

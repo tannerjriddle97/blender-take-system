@@ -28,6 +28,47 @@ RESULT = {
     "screenshot": str(SCREENSHOT),
 }
 TARGET_AREA = None
+EXPECTED_FINGERPRINT = None
+
+
+def scene_fingerprint(scene):
+    state = scene.take_system
+    return (
+        state.active_take_uuid,
+        state.active_take_index,
+        engine.scene_mutation_revision(scene),
+        getattr(scene.camera, "name_full", ""),
+        scene.render.engine,
+        scene.render.resolution_x,
+        scene.render.resolution_y,
+        scene.render.resolution_percentage,
+        scene.render.filepath,
+        scene.render.image_settings.file_format,
+        tuple(
+            (
+                take.uuid,
+                take.name,
+                take.parent_uuid,
+                take.is_main,
+                take.is_recording,
+                take.include_in_render,
+                take.render_output_path,
+                take.use_camera_override,
+                getattr(take.camera_override, "name_full", ""),
+                tuple(
+                    (
+                        override.uuid,
+                        override.target_ref_uuid,
+                        override.data_path,
+                        override.value_kind,
+                        override.string_value,
+                    )
+                    for override in take.overrides
+                ),
+            )
+            for take in state.takes
+        ),
+    )
 
 
 def fail(exc):
@@ -39,7 +80,7 @@ def fail(exc):
 
 
 def setup():
-    global TARGET_AREA
+    global EXPECTED_FINGERPRINT, TARGET_AREA
     try:
         blender_take_system.register()
         if hasattr(bpy.context.preferences.view, "show_splash"):
@@ -68,6 +109,14 @@ def setup():
         child.render_output_path = str(
             WORKSPACE / ".take_system_test" / "ui_preview.png"
         )
+        scene.take_system.active_take_index = next(
+            index
+            for index, take in enumerate(scene.take_system.takes)
+            if take.uuid == child.uuid
+        )
+        if scene.take_system.active_take_uuid != main.uuid:
+            raise AssertionError("Selecting the GUI fixture child applied it")
+        EXPECTED_FINGERPRINT = scene_fingerprint(scene)
 
         plan = engine.build_batch_plan(scene)
         if not plan.can_render or plan.queued != 2:
@@ -75,8 +124,10 @@ def setup():
         if not all(
             panel.is_registered
             for panel in (
+                ui.TS_PT_take_master_render,
                 ui.TS_PT_take_manager,
                 ui.TS_PT_take_scene_settings,
+                ui.TS_PT_take_capture_changes,
                 ui.TS_PT_take_batch_render,
                 ui.TS_PT_take_overrides,
             )
@@ -186,6 +237,11 @@ def open_review():
 
 def capture():
     try:
+        current_fingerprint = scene_fingerprint(bpy.context.scene)
+        if current_fingerprint != EXPECTED_FINGERPRINT:
+            raise AssertionError(
+                "Drawing the UI or review dialog mutated scene/take state"
+            )
         SCREENSHOT.parent.mkdir(parents=True, exist_ok=True)
         result = bpy.ops.screen.screenshot(
             filepath=str(SCREENSHOT),
