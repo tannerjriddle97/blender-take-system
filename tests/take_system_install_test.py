@@ -8,7 +8,7 @@ import bpy
 
 
 WORKSPACE = Path(__file__).resolve().parents[1]
-ZIP_PATH = WORKSPACE / "dist" / "blender_take_system_v0_6_1.zip"
+ZIP_PATH = WORKSPACE / "dist" / "blender_take_system_v0_6_2.zip"
 
 
 def require(condition, message):
@@ -49,7 +49,7 @@ require(
     "Installed add-on did not bootstrap Main",
 )
 
-require(module.bl_info["version"] == (0, 6, 1), "Installed version mismatch")
+require(module.bl_info["version"] == (0, 6, 2), "Installed version mismatch")
 require(module.bl_info["blender"] == (4, 0, 0), "Minimum version mismatch")
 
 release_types = (

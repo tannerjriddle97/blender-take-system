@@ -2,10 +2,11 @@
 
 This package is an installable Blender 4.0+ addon implementing the persistent
 take data model, manual override capture/resolve/apply engine, and dockable Take
-Manager. Version `0.6.1` adds an inherited render-profile editor directly to
+Manager. Version `0.6.2` includes an inherited render-profile editor directly in
 each applied take. Main/current settings remain the default; a child can
 independently override engine/sampling, resolution, output/format, film
-transparency, or color management. Version 0.6.0's automatic recording and the
+transparency, or color management. Cycles profiles include a render-denoiser
+selector and Transparent Glass. Version 0.6.0's automatic recording and the
 Phase 5 camera, batch controls, and transactional still rendering remain fully
 supported.
 
@@ -17,7 +18,7 @@ depths, sibling isolation, and atomic hierarchy resolution.
 
 ## Install
 
-Install `blender_take_system_v0_6_1.zip` with:
+Install `blender_take_system_v0_6_2.zip` with:
 
 1. **Edit → Preferences → Add-ons → Install from Disk**
 2. Select the ZIP.
@@ -31,7 +32,7 @@ initialize it lazily when displayed or when they receive a relevant
 dependency-graph update.
 
 Opening v0.4.x take data upgrades its schema in place without replacing existing
-takes or overrides. Version 0.6.1 keeps persistent schema 2; render profiles
+takes or overrides. Version 0.6.2 keeps persistent schema 2; render profiles
 remain ordinary override records and automatic-record
 snapshots and status are runtime-only, while the resulting ordinary overrides
 save in the `.blend`. The batch-output field starts blank and **Include in
@@ -118,14 +119,14 @@ settings and writes no override records.
 The independently inherited groups are:
 
 - **Engine & Sampling** — render engine; Cycles maximum/minimum adaptive
-  samples, threshold, and denoising; compatible Eevee sampling; or Workbench
-  shading controls;
+  samples, threshold, denoising, and render-denoiser selection; compatible
+  Eevee sampling; or Workbench shading controls;
 - **Resolution & Frame** — width, height, percentage, pixel aspect, frame rate,
   and frame-rate base;
 - **Output & Format** — Scene output, batch-output override, extension,
   overwrite/placeholder controls, image format, color mode/depth, compression,
   and quality;
-- **Film Transparency** — transparent background;
+- **Film Transparency** — transparent background and Cycles Transparent Glass;
 - **Color Management** — view transform, look, exposure, and gamma.
 
 The values live when the editor opens are the trusted inherited baseline. If a
@@ -134,7 +135,7 @@ values become the child records. Existing Main records are never replaced by a
 child edit. **Inherit All Render Groups** removes every direct render-profile
 record and clears the take's batch-output override. A legacy non-empty Output
 Override is recognized as a direct Output group when the file is opened in
-v0.6.1.
+v0.6.2.
 
 The portable core preset feature-detects and captures:
 
@@ -142,10 +143,12 @@ The portable core preset feature-detects and captures:
   rate base;
 - Scene output path, file-extension/overwrite/placeholder options, image format,
   color mode/depth, compression, and quality where writable;
-- film transparency and view transform, look, exposure, and gamma;
+- film transparency, Cycles Transparent Glass, and view transform, look,
+  exposure, and gamma;
 - available engine-specific controls: Cycles maximum/minimum samples,
-  denoising, adaptive sampling, and threshold; compatible Eevee render samples; or
-  Workbench lighting, color, shadow, cavity, and specular controls.
+  denoising, render-denoiser selection, adaptive sampling, and threshold;
+  compatible Eevee render samples; or Workbench lighting, color, shadow,
+  cavity, and specular controls.
 
 Blender-version or engine-specific properties that do not exist or cannot be
 stored are omitted. Switching engines in the editor exposes and stores the
@@ -405,7 +408,7 @@ Object / Cube / ["finish_code"]
 Right-click capture generates Blender-safe paths automatically, including
 escaped node and modifier names.
 
-## Supported through v0.6.1
+## Supported through v0.6.2
 
 - Main-rooted, UUID-linked arbitrary take hierarchies
 - Stable UUID snapshots across Blender CollectionProperty growth and
@@ -416,8 +419,8 @@ escaped node and modifier names.
 - Per-take render-profile dialog using Blender's native controls
 - Independently inheritable engine/sampling, resolution, output/format,
   transparency, and color-management groups
-- Cycles maximum/minimum adaptive samples, threshold, and denoising where
-  supported
+- Cycles maximum/minimum adaptive samples, threshold, denoising,
+  render-denoiser selection, and Transparent Glass where supported
 - Transactional profile Apply/Cancel with legacy batch-output compatibility
 - Opt-in automatic recording on the applied non-Main take
 - Atomic 0.45-second action grouping with automatic Main-baseline seeding
@@ -546,7 +549,7 @@ bpy.ops.take_system.render_included_takes()
   are not included.
 
 JSON exchange and drag-and-drop are not included. Take thumbnails/previews are
-deliberately deferred as a stretch goal; version 0.6.1 performs no preview
+deliberately deferred as a stretch goal; version 0.6.2 performs no preview
 generation or background thumbnail maintenance.
 
 The example script
@@ -605,7 +608,8 @@ render profiles, operator, Take Manager, collection-state, recent-action,
 automatic-recording, tracker performance/behavior, save/reload, and isolated
 packaged-install functional lanes. Render-profile coverage exercises Main
 defaults, partial groups, parent/child inheritance, minimum/maximum sampling,
-legacy output metadata, cancellation, and injected rollback failure. Phase 6
+denoiser selection, Transparent Glass, legacy output metadata, cancellation,
+and injected rollback failure. Phase 6
 coverage exercises eligibility, delayed and forced commits,
 grouped transforms, repeated updates, message-bus fallback, frame suppression,
 failure shutdown, save handling, same-take reapply, take switching, undo/redo,

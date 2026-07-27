@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $workspace = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $sourceRoot = Join-Path $workspace "blender_take_system"
 if (-not $OutputPath) {
-    $OutputPath = Join-Path $workspace "dist\blender_take_system_v0_6_1.zip"
+    $OutputPath = Join-Path $workspace "dist\blender_take_system_v0_6_2.zip"
 }
 elseif (-not [System.IO.Path]::IsPathRooted($OutputPath)) {
     $OutputPath = Join-Path $workspace $OutputPath

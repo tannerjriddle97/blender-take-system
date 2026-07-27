@@ -105,6 +105,7 @@ _ENGINE_RENDER_SETTING_PATHS = {
     "CYCLES": (
         "cycles.samples",
         "cycles.use_denoising",
+        "cycles.denoiser",
         "cycles.use_adaptive_sampling",
         "cycles.adaptive_min_samples",
         "cycles.adaptive_threshold",
@@ -121,6 +122,11 @@ _ENGINE_RENDER_SETTING_PATHS = {
         "display.shading.show_shadows",
         "display.shading.show_cavity",
         "display.shading.show_specular_highlight",
+    ),
+}
+_ENGINE_TRANSPARENCY_SETTING_PATHS = {
+    "CYCLES": (
+        "cycles.film_transparent_glass",
     ),
 }
 _INVALID_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
@@ -1765,9 +1771,16 @@ def find_override(take, target_id, data_path):
 def is_render_setting_path(data_path):
     """Return whether a Scene path belongs to the render profile."""
 
-    return data_path in _CORE_RENDER_SETTING_PATHS or any(
-        data_path in engine_paths
-        for engine_paths in _ENGINE_RENDER_SETTING_PATHS.values()
+    return (
+        data_path in _CORE_RENDER_SETTING_PATHS
+        or any(
+            data_path in engine_paths
+            for engine_paths in _ENGINE_RENDER_SETTING_PATHS.values()
+        )
+        or any(
+            data_path in engine_paths
+            for engine_paths in _ENGINE_TRANSPARENCY_SETTING_PATHS.values()
+        )
     )
 
 
@@ -1782,6 +1795,11 @@ def render_setting_group_for_path(data_path):
         for paths in _ENGINE_RENDER_SETTING_PATHS.values()
     ):
         return RENDER_GROUP_ENGINE_SAMPLING
+    if any(
+        data_path in paths
+        for paths in _ENGINE_TRANSPARENCY_SETTING_PATHS.values()
+    ):
+        return RENDER_GROUP_TRANSPARENCY
     return None
 
 
@@ -1816,9 +1834,18 @@ def render_profile_group_paths(scene, group_identifier, *, all_engines=False):
             f"Unknown render-profile group: {group_identifier}"
         )
     paths = list(_RENDER_SETTING_GROUP_PATHS[group_identifier])
-    if group_identifier == RENDER_GROUP_ENGINE_SAMPLING:
+    engine_group_paths = (
+        _ENGINE_RENDER_SETTING_PATHS
+        if group_identifier == RENDER_GROUP_ENGINE_SAMPLING
+        else (
+            _ENGINE_TRANSPARENCY_SETTING_PATHS
+            if group_identifier == RENDER_GROUP_TRANSPARENCY
+            else None
+        )
+    )
+    if engine_group_paths is not None:
         if all_engines:
-            for engine_paths in _ENGINE_RENDER_SETTING_PATHS.values():
+            for engine_paths in engine_group_paths.values():
                 paths.extend(engine_paths)
         else:
             try:
@@ -1826,7 +1853,7 @@ def render_profile_group_paths(scene, group_identifier, *, all_engines=False):
             except (AttributeError, ReferenceError):
                 engine_identifier = ""
             paths.extend(
-                _ENGINE_RENDER_SETTING_PATHS.get(engine_identifier, ())
+                engine_group_paths.get(engine_identifier, ())
             )
     return _supported_render_setting_paths(scene, paths)
 
@@ -1855,6 +1882,9 @@ def render_setting_paths(scene):
     except (AttributeError, ReferenceError):
         engine_identifier = ""
     paths.extend(_ENGINE_RENDER_SETTING_PATHS.get(engine_identifier, ()))
+    paths.extend(
+        _ENGINE_TRANSPARENCY_SETTING_PATHS.get(engine_identifier, ())
+    )
     return _supported_render_setting_paths(scene, paths)
 
 

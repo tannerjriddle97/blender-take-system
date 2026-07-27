@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Take System",
     "author": "OpenAI",
-    "version": (0, 6, 1),
+    "version": (0, 6, 2),
     "blender": (4, 0, 0),
     "location": "Properties > Scene > Take Manager",
     "description": (

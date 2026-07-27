@@ -1238,6 +1238,10 @@ class TS_OT_edit_render_profile(bpy.types.Operator):
                 )
             if hasattr(cycles, "use_denoising"):
                 controls.prop(cycles, "use_denoising", text="Denoising")
+                denoiser = controls.column(align=True)
+                denoiser.enabled = bool(cycles.use_denoising)
+                if hasattr(cycles, "denoiser"):
+                    denoiser.prop(cycles, "denoiser", text="Denoiser")
         elif engine_identifier in {
             "BLENDER_EEVEE",
             "BLENDER_EEVEE_NEXT",
@@ -1338,6 +1342,18 @@ class TS_OT_edit_render_profile(bpy.types.Operator):
             "film_transparent",
             text="Transparent Background",
         )
+        if (
+            scene.render.engine == "CYCLES"
+            and hasattr(scene, "cycles")
+            and hasattr(scene.cycles, "film_transparent_glass")
+        ):
+            glass = controls.column(align=True)
+            glass.enabled = bool(scene.render.film_transparent)
+            glass.prop(
+                scene.cycles,
+                "film_transparent_glass",
+                text="Transparent Glass",
+            )
 
     def _draw_color_management(self, layout, scene, take):
         _box, controls, _enabled = self._group_box(

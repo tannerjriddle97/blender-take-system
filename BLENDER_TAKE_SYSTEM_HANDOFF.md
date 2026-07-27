@@ -39,7 +39,7 @@ Features added along the way include:
 - a runtime "Apply Most Recent Action as Overrides" workflow;
 - automatic 0.45-second action grouping over that same tracker and override
   engine;
-- independently inherited v0.6.1 render-profile groups edited through Blender's
+- independently inherited v0.6.2 render-profile groups edited through Blender's
   native controls;
 - per-View-Layer collection enabled/disabled overrides using
   `LayerCollection.exclude`;
@@ -54,14 +54,14 @@ ordering improvements, and opt-in take previews/thumbnails.
 
 Current release:
 
-- Add-on version: `0.6.1`
+- Add-on version: `0.6.2`
 - Persistent schema: `2`
 - Declared Blender support: `4.0.0+`
 - Actually tested: Blender `5.1.2` and `5.2.0`
 - Release ZIP:
-  `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_v0_6_1.zip`
+  `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_v0_6_2.zip`
 - ZIP SHA-256:
-  `A0AC2C32D06602B7CF31A164887A7A984921BB32289782D3DE3606713BB8F883`
+  `7FB000AA3CB1E189DF5ED70F271ED9F4131D50E8ACD6089275B9C23C3FBF3DFF`
 
 ## Documentation audit
 
@@ -70,7 +70,7 @@ but it is not yet a complete formal developer reference.
 
 What is strong:
 
-- `README.md` is detailed and current through v0.6.1. It covers installation,
+- `README.md` is detailed and current through v0.6.2. It covers installation,
   UI access, hierarchy behavior, automatic recording, inherited render
   profiles, camera/render workflows, transactional batch behavior, collection
   states, recent-action capture, performance, limitations, scripting examples,
@@ -144,7 +144,7 @@ Explicit non-goals/current deferrals:
 | `C:\Codex_Playpen\blender-take-system\blender_take_system\README.md` | User guide, behavior reference, limitations, test instructions |
 | `C:\Codex_Playpen\blender-take-system\tests\` | Blender background integration/regression tests and package builder |
 | `C:\Codex_Playpen\blender-take-system\examples\take_system_phase_1_2_demo.py` | Small Main/Red/Blue example scene script |
-| `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_v0_6_1.zip` | Current installable release |
+| `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_v0_6_2.zip` | Current installable release |
 
 The package builder deliberately includes only:
 
@@ -491,7 +491,7 @@ generic Object pointer behavior reliably.
 
 ### Inherited render profile
 
-Version 0.6.1 replaces the two-step preset UI with
+Version 0.6.1 replaced the two-step preset UI with
 `take_system.edit_render_profile`. The underlying
 `capture_render_settings()` API remains for compatibility. Both paths store
 ordinary Scene overrides; there is no parallel render inheritance system.
@@ -526,11 +526,12 @@ Portable core:
 
 Engine-specific where available:
 
-- Cycles: maximum/minimum samples, denoising, adaptive sampling, threshold.
+- Cycles: maximum/minimum samples, denoising, render-denoiser selection,
+  adaptive sampling, threshold, and Transparent Glass.
 - Eevee/Eevee Next: compatible render sample field.
 - Workbench: lighting, color mode, shadows, cavity, specular highlight.
 
-The v0.6.1 UI workflow is:
+The v0.6.2 UI workflow is:
 
 1. Apply/select the take.
 2. Click the row's Output icon or **Edit Render Profile...**.
@@ -699,8 +700,8 @@ Hot reload logic explicitly reloads submodules when Blender retains an older
 package module during an in-place ZIP update. Teardown removes every handler,
 timer, menu hook, registered class, Scene property, and runtime cache.
 
-Schema 2 added Phase 5 persistent state. Phases 6 and the v0.6.1 render-profile
-update add no persistent fields or changed interpretations, so version 0.6.1
+Schema 2 added Phase 5 persistent state. Phases 6 and the v0.6.2 render-profile
+updates add no persistent fields or changed interpretations, so version 0.6.2
 retains schema 2. Opening v0.4.x data
 migrates in place:
 
@@ -787,8 +788,9 @@ The suite covers:
 - large-scene tracker behavior/performance;
 - camera inheritance and render preset capture/removal;
 - granular render-profile groups, Main baseline seeding, parent/child
-  inheritance, minimum/maximum Cycles samples, legacy output metadata, Cancel,
-  and injected transactional rollback;
+  inheritance, minimum/maximum Cycles samples, render-denoiser selection,
+  Transparent Glass, legacy output metadata, Cancel, and injected transactional
+  rollback;
 - output derivation and collision handling;
 - whole-queue dry preflight;
 - batch success, injected apply/render/cancellation failure, partial reports,
@@ -798,9 +800,9 @@ The suite covers:
 - clean packaged install and functional use.
 
 All lanes passed in Blender 5.1.2 during earlier releases and in Blender 5.2.0
-for Phase 6 on 2026-07-27. The focused v0.6.1 render-profile lane also passed in
+for Phase 6 on 2026-07-27. The focused v0.6.2 render-profile lane also passed in
 Blender 5.1.2 and 5.2.0. The package hash listed in this handoff was rechecked
-on disk after the final v0.6.1 build. Blender 4.x remains a
+on disk after the final v0.6.2 build. Blender 4.x remains a
 declared-but-unverified compatibility target.
 
 An isolated non-background Blender 5.2 GUI-context smoke test also verified the

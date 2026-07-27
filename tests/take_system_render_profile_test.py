@@ -59,10 +59,16 @@ try:
     scene.render.filepath = "//default/"
     scene.render.film_transparent = False
     scene.view_settings.exposure = 0.0
+    baseline_denoiser = ""
+    child_denoiser = ""
     if scene.render.engine == "CYCLES":
         scene.cycles.samples = 128
+        baseline_denoiser = scene.cycles.denoiser
+        child_denoiser = baseline_denoiser
         if hasattr(scene.cycles, "adaptive_min_samples"):
             scene.cycles.adaptive_min_samples = 0
+        if hasattr(scene.cycles, "film_transparent_glass"):
+            scene.cycles.film_transparent_glass = False
 
     child = engine.create_take(
         scene,
@@ -82,9 +88,21 @@ try:
         scene,
         engine.RENDER_GROUP_TRANSPARENCY,
     )
+    sampling_paths = engine.render_profile_group_paths(
+        scene,
+        engine.RENDER_GROUP_ENGINE_SAMPLING,
+    )
     require(
         "render.resolution_x" in resolution_paths
-        and transparency_paths == ("render.film_transparent",),
+        and "render.film_transparent" in transparency_paths
+        and (
+            scene.render.engine != "CYCLES"
+            or (
+                "cycles.denoiser" in sampling_paths
+                and "cycles.film_transparent_glass"
+                in transparency_paths
+            )
+        ),
         "Expected render-profile groups were not feature-detected",
     )
 
@@ -92,10 +110,23 @@ try:
     scene.render.resolution_y = 600
     scene.render.resolution_percentage = 50
     scene.render.film_transparent = True
+    if scene.render.engine == "CYCLES":
+        for candidate in ("OPTIX", "OPENIMAGEDENOISE"):
+            if candidate == baseline_denoiser:
+                continue
+            try:
+                scene.cycles.denoiser = candidate
+            except TypeError:
+                continue
+            child_denoiser = candidate
+            break
+        if hasattr(scene.cycles, "film_transparent_glass"):
+            scene.cycles.film_transparent_glass = True
     first_report = engine.configure_render_profile(
         scene,
         child_uuid,
         {
+            engine.RENDER_GROUP_ENGINE_SAMPLING,
             engine.RENDER_GROUP_RESOLUTION,
             engine.RENDER_GROUP_TRANSPARENCY,
         },
@@ -104,10 +135,15 @@ try:
     child = engine.find_take(scene, child_uuid)
     require(
         first_report.configured
-        == len(resolution_paths) + len(transparency_paths)
+        == (
+            len(sampling_paths)
+            + len(resolution_paths)
+            + len(transparency_paths)
+        )
         and first_report.main_seeded == first_report.configured
         and engine.direct_render_profile_groups(scene, child)
         == {
+            engine.RENDER_GROUP_ENGINE_SAMPLING,
             engine.RENDER_GROUP_RESOLUTION,
             engine.RENDER_GROUP_TRANSPARENCY,
         },
@@ -126,7 +162,14 @@ try:
         scene.render.resolution_x == 1920
         and scene.render.resolution_y == 1080
         and scene.render.resolution_percentage == 100
-        and not scene.render.film_transparent,
+        and not scene.render.film_transparent
+        and (
+            scene.render.engine != "CYCLES"
+            or (
+                scene.cycles.denoiser == baseline_denoiser
+                and not scene.cycles.film_transparent_glass
+            )
+        ),
         "Main did not restore the pre-editor render defaults",
     )
     engine.apply_take(scene, child_uuid, strict=True)
@@ -134,7 +177,14 @@ try:
         scene.render.resolution_x == 800
         and scene.render.resolution_y == 600
         and scene.render.resolution_percentage == 50
-        and scene.render.film_transparent,
+        and scene.render.film_transparent
+        and (
+            scene.render.engine != "CYCLES"
+            or (
+                scene.cycles.denoiser == child_denoiser
+                and scene.cycles.film_transparent_glass
+            )
+        ),
         "Child profile did not restore its direct resolution/transparency",
     )
 
@@ -153,13 +203,18 @@ try:
     )
     child = engine.find_take(scene, child_uuid)
     require(
-        second_report.removed == 1
+        second_report.removed
+        == len(sampling_paths) + len(transparency_paths)
         and engine.direct_render_profile_groups(scene, child)
         == {
             engine.RENDER_GROUP_RESOLUTION,
             engine.RENDER_GROUP_COLOR_MANAGEMENT,
         }
         and not scene.render.film_transparent
+        and (
+            scene.render.engine != "CYCLES"
+            or not scene.cycles.film_transparent_glass
+        )
         and abs(scene.view_settings.exposure - 1.25) < 1e-6,
         "Group-level inheritance did not remove transparency atomically",
     )
@@ -209,11 +264,20 @@ try:
     )
     scene.render.resolution_x = 1234
     scene.render.film_transparent = True
+    if (
+        scene.render.engine == "CYCLES"
+        and hasattr(scene.cycles, "film_transparent_glass")
+    ):
+        scene.cycles.film_transparent_glass = True
     scene.view_settings.exposure = -2.0
     engine.restore_render_profile(scene, cancel_snapshot)
     require(
         scene.render.resolution_x == 800
         and not scene.render.film_transparent
+        and (
+            scene.render.engine != "CYCLES"
+            or not scene.cycles.film_transparent_glass
+        )
         and abs(scene.view_settings.exposure - 1.25) < 1e-6
         and sum(len(take.overrides) for take in scene.take_system.takes)
         == record_count_before_cancel,
@@ -305,7 +369,7 @@ try:
     print(
         "TAKE_SYSTEM_RENDER_PROFILE_OK",
         {
-            "first_groups": 2,
+            "first_groups": 3,
             "group_removed": second_report.removed,
             "grandchild_groups": 1,
             "rollback_calls": capture_calls["count"],
