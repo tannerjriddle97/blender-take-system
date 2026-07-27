@@ -6,6 +6,10 @@ This is the self-contained project handoff for the Blender Take System add-on in
 `C:\Codex_Playpen\blender-take-system`. It is written so a new Codex chat can continue development
 without the previous conversation.
 
+The next planned work is a complete Take Manager and batch-render UI overhaul.
+Read `UI_OVERHAUL_HANDOFF.md` for the focused product brief, implementation
+sequence, and acceptance criteria before changing UI code.
+
 Suggested first message in a new chat:
 
 > Continue the Blender Take System project described in
