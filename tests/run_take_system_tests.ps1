@@ -41,6 +41,7 @@ $testScripts = @(
     "take_system_recording_test.py",
     "take_system_recent_perf_test.py",
     "take_system_phase5_test.py",
+    "take_system_render_profile_test.py",
     "take_system_batch_render_test.py",
     "take_system_persistence_test.py"
 )

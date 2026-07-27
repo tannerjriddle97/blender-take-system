@@ -3,11 +3,11 @@
 bl_info = {
     "name": "Take System",
     "author": "OpenAI",
-    "version": (0, 6, 0),
+    "version": (0, 6, 1),
     "blender": (4, 0, 0),
     "location": "Properties > Scene > Take Manager",
     "description": (
-        "Hierarchical takes with automatic override recording and batch rendering"
+        "Hierarchical takes with render profiles, recording, and batch rendering"
     ),
     "category": "Scene",
     "doc_url": "",

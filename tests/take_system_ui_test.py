@@ -431,6 +431,7 @@ try:
         operators.TS_OT_open_manager,
         operators.TS_OT_configure_take_camera,
         operators.TS_OT_clear_take_camera,
+        operators.TS_OT_edit_render_profile,
         operators.TS_OT_capture_render_settings,
         operators.TS_OT_clear_render_settings,
         operators.TS_OT_render_included_takes,

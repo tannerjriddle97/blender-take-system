@@ -5,7 +5,7 @@ Take Manager. It stores property overrides in a Main-rooted hierarchy so one
 scene can hold material, transform, visibility, camera, and render-setting
 variants without duplicating scene content.
 
-- Current release: **0.6.0 (Phase 6)**
+- Current release: **0.6.1 (Phase 6 render-profile update)**
 - Persistent schema: **2**
 - Supported Blender versions: **4.0+**
 - Verified Blender versions: **5.1.2 and 5.2.0**
@@ -50,6 +50,11 @@ Phases 1–6 are complete. Phase 6 adds opt-in automatic recording for the
 applied non-Main take. Supported edits are grouped into atomic override
 batches, Main baselines are seeded automatically, and recording fails closed
 on invalid or unsupported changes.
+
+Version 0.6.1 adds an inherited render-profile editor directly to Take Manager.
+Main/current settings are the default, while each child can independently
+override engine/sampling, resolution, output/format, transparency, or color
+management.
 
 Phase 7 is reserved for later exchange and workflow features such as JSON
 import/export, ordering improvements, and opt-in take previews.

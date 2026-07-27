@@ -19,9 +19,64 @@ import bpy
 MAIN_NAME = "Main"
 SCHEMA_VERSION = 2
 
-# These paths form the Phase 5 render-settings preset. They are stored through
-# the same generic Scene override engine as every other take value, so normal
-# Main-to-child inheritance and strict application remain authoritative.
+# Render-profile paths are stored through the same generic Scene override
+# engine as every other take value. Groups let the UI keep unrelated settings
+# inherited instead of freezing the entire preset on every take.
+RENDER_GROUP_ENGINE_SAMPLING = "ENGINE_SAMPLING"
+RENDER_GROUP_RESOLUTION = "RESOLUTION"
+RENDER_GROUP_OUTPUT = "OUTPUT"
+RENDER_GROUP_TRANSPARENCY = "TRANSPARENCY"
+RENDER_GROUP_COLOR_MANAGEMENT = "COLOR_MANAGEMENT"
+RENDER_PROFILE_GROUPS = (
+    RENDER_GROUP_ENGINE_SAMPLING,
+    RENDER_GROUP_RESOLUTION,
+    RENDER_GROUP_OUTPUT,
+    RENDER_GROUP_TRANSPARENCY,
+    RENDER_GROUP_COLOR_MANAGEMENT,
+)
+RENDER_PROFILE_GROUP_LABELS = {
+    RENDER_GROUP_ENGINE_SAMPLING: "Engine & Sampling",
+    RENDER_GROUP_RESOLUTION: "Resolution & Frame",
+    RENDER_GROUP_OUTPUT: "Output & Format",
+    RENDER_GROUP_TRANSPARENCY: "Film Transparency",
+    RENDER_GROUP_COLOR_MANAGEMENT: "Color Management",
+}
+
+_RENDER_SETTING_GROUP_PATHS = {
+    RENDER_GROUP_ENGINE_SAMPLING: (
+        "render.engine",
+    ),
+    RENDER_GROUP_RESOLUTION: (
+        "render.resolution_x",
+        "render.resolution_y",
+        "render.resolution_percentage",
+        "render.pixel_aspect_x",
+        "render.pixel_aspect_y",
+        "render.fps",
+        "render.fps_base",
+    ),
+    RENDER_GROUP_OUTPUT: (
+        "render.filepath",
+        "render.use_file_extension",
+        "render.use_overwrite",
+        "render.use_placeholder",
+        "render.image_settings.file_format",
+        "render.image_settings.color_mode",
+        "render.image_settings.color_depth",
+        "render.image_settings.compression",
+        "render.image_settings.quality",
+    ),
+    RENDER_GROUP_TRANSPARENCY: (
+        "render.film_transparent",
+    ),
+    RENDER_GROUP_COLOR_MANAGEMENT: (
+        "view_settings.view_transform",
+        "view_settings.look",
+        "view_settings.exposure",
+        "view_settings.gamma",
+    ),
+}
+
 _CORE_RENDER_SETTING_PATHS = (
     "render.engine",
     "render.resolution_x",
@@ -51,6 +106,7 @@ _ENGINE_RENDER_SETTING_PATHS = {
         "cycles.samples",
         "cycles.use_denoising",
         "cycles.use_adaptive_sampling",
+        "cycles.adaptive_min_samples",
         "cycles.adaptive_threshold",
     ),
     "BLENDER_EEVEE": (
@@ -171,6 +227,18 @@ class CaptureBatchReport:
     captured: int = 0
     created: int = 0
     main_seeded: int = 0
+    paths: list = field(default_factory=list)
+
+
+@dataclass
+class RenderProfileReport:
+    take_uuid: str
+    take_name: str
+    configured: int = 0
+    created: int = 0
+    main_seeded: int = 0
+    removed: int = 0
+    groups: tuple = ()
     paths: list = field(default_factory=list)
 
 
@@ -1695,7 +1763,7 @@ def find_override(take, target_id, data_path):
 
 
 def is_render_setting_path(data_path):
-    """Return whether a Scene path belongs to the Phase 5 render preset."""
+    """Return whether a Scene path belongs to the render profile."""
 
     return data_path in _CORE_RENDER_SETTING_PATHS or any(
         data_path in engine_paths
@@ -1703,18 +1771,27 @@ def is_render_setting_path(data_path):
     )
 
 
-def render_setting_paths(scene):
-    """Return the feature-detected render preset for the current engine."""
+def render_setting_group_for_path(data_path):
+    """Return the render-profile group owning ``data_path``, if any."""
 
-    paths = list(_CORE_RENDER_SETTING_PATHS)
-    try:
-        engine_identifier = str(scene.render.engine)
-    except (AttributeError, ReferenceError):
-        engine_identifier = ""
-    paths.extend(_ENGINE_RENDER_SETTING_PATHS.get(engine_identifier, ()))
+    for group_identifier, paths in _RENDER_SETTING_GROUP_PATHS.items():
+        if data_path in paths:
+            return group_identifier
+    if any(
+        data_path in paths
+        for paths in _ENGINE_RENDER_SETTING_PATHS.values()
+    ):
+        return RENDER_GROUP_ENGINE_SAMPLING
+    return None
 
+
+def _supported_render_setting_paths(scene, paths):
     supported = []
+    seen = set()
     for data_path in paths:
+        if data_path in seen:
+            continue
+        seen.add(data_path)
         try:
             validate_capture_path(scene, data_path)
             value = read_path_value(scene, data_path)
@@ -1729,6 +1806,74 @@ def render_setting_paths(scene):
             continue
         supported.append(data_path)
     return tuple(supported)
+
+
+def render_profile_group_paths(scene, group_identifier, *, all_engines=False):
+    """Return feature-detected paths for one independently inherited group."""
+
+    if group_identifier not in RENDER_PROFILE_GROUPS:
+        raise TakeSystemError(
+            f"Unknown render-profile group: {group_identifier}"
+        )
+    paths = list(_RENDER_SETTING_GROUP_PATHS[group_identifier])
+    if group_identifier == RENDER_GROUP_ENGINE_SAMPLING:
+        if all_engines:
+            for engine_paths in _ENGINE_RENDER_SETTING_PATHS.values():
+                paths.extend(engine_paths)
+        else:
+            try:
+                engine_identifier = str(scene.render.engine)
+            except (AttributeError, ReferenceError):
+                engine_identifier = ""
+            paths.extend(
+                _ENGINE_RENDER_SETTING_PATHS.get(engine_identifier, ())
+            )
+    return _supported_render_setting_paths(scene, paths)
+
+
+def render_profile_paths(scene, *, all_engines=False):
+    """Return every supported path displayed by the render-profile editor."""
+
+    paths = []
+    for group_identifier in RENDER_PROFILE_GROUPS:
+        paths.extend(
+            render_profile_group_paths(
+                scene,
+                group_identifier,
+                all_engines=all_engines,
+            )
+        )
+    return tuple(dict.fromkeys(paths))
+
+
+def render_setting_paths(scene):
+    """Return the feature-detected full preset for the current engine."""
+
+    paths = list(_CORE_RENDER_SETTING_PATHS)
+    try:
+        engine_identifier = str(scene.render.engine)
+    except (AttributeError, ReferenceError):
+        engine_identifier = ""
+    paths.extend(_ENGINE_RENDER_SETTING_PATHS.get(engine_identifier, ()))
+    return _supported_render_setting_paths(scene, paths)
+
+
+def _render_setting_sort_key(data_path):
+    priority = {
+        "render.engine": -40,
+        "render.image_settings.file_format": -30,
+        "render.image_settings.color_mode": -20,
+        "render.image_settings.color_depth": -10,
+        "view_settings.view_transform": -5,
+        "view_settings.look": -4,
+    }
+    ranked = priority.get(data_path)
+    if ranked is not None:
+        return (ranked, 0)
+    try:
+        return (_path_depth(data_path), len(data_path))
+    except TakePathError:
+        return (1_000_000, len(data_path))
 
 
 def direct_camera_override(scene, take):
@@ -1764,10 +1909,12 @@ def _sync_camera_metadata(scene, take):
 
 
 def take_has_render_settings(scene, take):
-    """Return whether a take directly owns any Phase 5 render-setting record."""
+    """Return whether a take directly owns any render-setting record."""
 
     if take is None:
         return False
+    if str(take.render_output_path or "").strip():
+        return True
     for override in take.overrides:
         try:
             target = override.target_id
@@ -1779,6 +1926,52 @@ def take_has_render_settings(scene, take):
         ):
             return True
     return False
+
+
+def direct_render_setting_paths(scene, take, group_identifier=None):
+    """Return direct Scene render paths owned by ``take``."""
+
+    if take is None:
+        return ()
+    if (
+        group_identifier is not None
+        and group_identifier not in RENDER_PROFILE_GROUPS
+    ):
+        raise TakeSystemError(
+            f"Unknown render-profile group: {group_identifier}"
+        )
+    scene_pointer = _safe_id_pointer(scene)
+    paths = []
+    for override in take.overrides:
+        try:
+            target = override.target_id
+        except ReferenceError:
+            target = None
+        data_path = override.data_path
+        if (
+            _safe_id_pointer(target) == scene_pointer
+            and is_render_setting_path(data_path)
+            and (
+                group_identifier is None
+                or render_setting_group_for_path(data_path)
+                == group_identifier
+            )
+        ):
+            paths.append(data_path)
+    return tuple(paths)
+
+
+def direct_render_profile_groups(scene, take):
+    """Return render groups with at least one direct record on ``take``."""
+
+    groups = {
+        group_identifier
+        for group_identifier in RENDER_PROFILE_GROUPS
+        if direct_render_setting_paths(scene, take, group_identifier)
+    }
+    if take is not None and str(take.render_output_path or "").strip():
+        groups.add(RENDER_GROUP_OUTPUT)
+    return frozenset(groups)
 
 
 def resolved_camera(scene, take_uuid=None):
@@ -2511,6 +2704,272 @@ def capture_render_settings(scene, take_uuid=None):
     )
 
 
+def snapshot_render_profile(scene):
+    """Return detached live values for every available profile control."""
+
+    snapshot = {}
+    for data_path in render_profile_paths(scene, all_engines=True):
+        rna_property = validate_capture_path(scene, data_path)
+        value = read_path_value(scene, data_path)
+        _prop_type, _subtype, normalized = classify_value(
+            value,
+            rna_property,
+        )
+        snapshot[data_path] = normalized
+    return snapshot
+
+
+def restore_render_profile(scene, values):
+    """Restore a render-profile snapshot under the internal-write guard."""
+
+    failures = []
+    wrote_value = False
+    with _applying_guard():
+        for data_path in sorted(values, key=_render_setting_sort_key):
+            try:
+                rna_property = validate_capture_path(scene, data_path)
+                _value_type, _value_subtype, desired_value = classify_value(
+                    values[data_path],
+                    rna_property,
+                )
+                current_value = read_path_value(scene, data_path)
+                (
+                    _current_type,
+                    _current_subtype,
+                    current_value,
+                ) = classify_value(current_value, rna_property)
+                if _exact_normalized_values_equal(
+                    current_value,
+                    desired_value,
+                ):
+                    continue
+                write_path_value(scene, data_path, desired_value)
+                wrote_value = True
+            except (
+                TakeSystemError,
+                AttributeError,
+                ReferenceError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                failures.append(f"{data_path}: {exc}")
+    if wrote_value:
+        _mark_scene_mutated(scene)
+    if failures:
+        raise TakeSystemError(
+            "Render-profile restoration failed: " + "; ".join(failures)
+        )
+    return wrote_value
+
+
+def configure_render_profile(
+    scene,
+    take_uuid,
+    enabled_groups,
+    *,
+    baseline_values=None,
+    batch_output_path=None,
+    baseline_batch_output_path=None,
+):
+    """Atomically store selected profile groups and inherit all others.
+
+    The live Scene contains the values staged by the editor. ``baseline_values``
+    is its pre-dialog snapshot, allowing a child to seed missing Main records
+    from the inherited default rather than from the newly edited value.
+    """
+
+    main = ensure_main_take(scene)
+    take = find_take(scene, take_uuid)
+    if take is None:
+        raise TakeHierarchyError(f"Take does not exist: {take_uuid}")
+    take_chain(scene, take.uuid)
+    if scene.take_system.active_take_uuid != take.uuid:
+        raise TakeHierarchyError(
+            "Apply the destination take before editing its render profile"
+        )
+
+    unknown_groups = set(enabled_groups) - set(RENDER_PROFILE_GROUPS)
+    if unknown_groups:
+        raise TakeSystemError(
+            "Unknown render-profile group(s): "
+            + ", ".join(sorted(unknown_groups))
+        )
+    enabled = tuple(
+        group_identifier
+        for group_identifier in RENDER_PROFILE_GROUPS
+        if group_identifier in enabled_groups
+    )
+    baselines = (
+        snapshot_render_profile(scene)
+        if baseline_values is None
+        else dict(baseline_values)
+    )
+
+    desired_paths = []
+    for group_identifier in enabled:
+        desired_paths.extend(
+            render_profile_group_paths(scene, group_identifier)
+        )
+    desired_paths = tuple(dict.fromkeys(desired_paths))
+    desired_path_set = set(desired_paths)
+
+    prepared = []
+    for data_path in desired_paths:
+        rna_property = validate_capture_path(scene, data_path)
+        current_value = read_path_value(scene, data_path)
+        _value_type, _value_subtype, desired_value = classify_value(
+            current_value,
+            rna_property,
+        )
+        main_override = find_override(main, scene, data_path)
+        if (
+            not take.is_main
+            and main_override is None
+            and data_path not in baselines
+        ):
+            raise TakeSystemError(
+                f"The inherited baseline is unavailable for '{data_path}'"
+            )
+        baseline_value = baselines.get(data_path, desired_value)
+        _base_type, _base_subtype, baseline_value = classify_value(
+            baseline_value,
+            rna_property,
+        )
+        prepared.append(
+            (
+                data_path,
+                baseline_value,
+                desired_value,
+                rna_property,
+            )
+        )
+
+    remove_indices = []
+    if not take.is_main:
+        scene_pointer = _safe_id_pointer(scene)
+        enabled_set = set(enabled)
+        for index, override in enumerate(take.overrides):
+            try:
+                target = override.target_id
+            except ReferenceError:
+                target = None
+            data_path = override.data_path
+            group_identifier = render_setting_group_for_path(data_path)
+            if (
+                _safe_id_pointer(target) == scene_pointer
+                and group_identifier is not None
+                and (
+                    group_identifier not in enabled_set
+                    or data_path not in desired_path_set
+                )
+            ):
+                remove_indices.append(index)
+
+    main_uuid = main.uuid
+    take_uuid_snapshot = take.uuid
+    main_snapshot = [
+        _snapshot_override_record(override)
+        for override in main.overrides
+    ]
+    take_snapshot = (
+        main_snapshot
+        if take.is_main
+        else [
+            _snapshot_override_record(override)
+            for override in take.overrides
+        ]
+    )
+    original_batch_output_path = (
+        take.render_output_path
+        if baseline_batch_output_path is None
+        else str(baseline_batch_output_path)
+    )
+    report = RenderProfileReport(
+        take_uuid=take_uuid_snapshot,
+        take_name=take.name,
+        groups=enabled,
+    )
+
+    try:
+        take = find_take(scene, take_uuid_snapshot)
+        if take is None:
+            raise TakeHierarchyError(
+                "The render-profile take changed before it was stored"
+            )
+        for index in reversed(remove_indices):
+            take.overrides.remove(index)
+            report.removed += 1
+
+        for (
+            data_path,
+            baseline_value,
+            desired_value,
+            rna_property,
+        ) in prepared:
+            main = find_take(scene, main_uuid)
+            take = find_take(scene, take_uuid_snapshot)
+            if main is None or take is None:
+                raise TakeHierarchyError(
+                    "The render-profile take changed while values were stored"
+                )
+            if take.is_main:
+                existing = find_override(take, scene, data_path)
+                created = existing is None
+                if existing is None:
+                    existing = _add_override(take, scene, data_path)
+                _set_target_metadata(existing, scene)
+                store_override_value(
+                    existing,
+                    desired_value,
+                    rna_property,
+                )
+                result = CaptureResult(
+                    override=existing,
+                    created=created,
+                    main_seeded=False,
+                )
+            else:
+                result = _capture_override_values(
+                    scene,
+                    main,
+                    take,
+                    scene,
+                    data_path,
+                    baseline_value,
+                    desired_value,
+                    rna_property,
+                )
+            report.configured += 1
+            report.created += int(result.created)
+            report.main_seeded += int(result.main_seeded)
+            report.paths.append(data_path)
+
+        take = find_take(scene, take_uuid_snapshot)
+        if take is None:
+            raise TakeHierarchyError(
+                "The render-profile take changed before output was stored"
+            )
+        if batch_output_path is not None:
+            take.render_output_path = str(batch_output_path)
+        apply_take(scene, take_uuid_snapshot, strict=True)
+    except Exception:
+        main = find_take(scene, main_uuid)
+        take = find_take(scene, take_uuid_snapshot)
+        if main is not None:
+            _replace_override_records(main, main_snapshot)
+        if take is not None and take_uuid_snapshot != main_uuid:
+            _replace_override_records(take, take_snapshot)
+        if take is not None:
+            take.render_output_path = original_batch_output_path
+        try:
+            restore_render_profile(scene, baselines)
+        except TakeSystemError:
+            pass
+        raise
+    return report
+
+
 def _direct_render_override_indices(scene, take):
     scene_pointer = _safe_id_pointer(scene)
     indices = []
@@ -2534,7 +2993,9 @@ def remove_render_settings(scene, take_uuid):
     if take is None:
         raise TakeHierarchyError(f"Take does not exist: {take_uuid}")
     indices = _direct_render_override_indices(scene, take)
-    if not indices:
+    original_output_path = take.render_output_path
+    had_output_path = bool(str(original_output_path or "").strip())
+    if not indices and not had_output_path:
         raise TakeSystemError("The selected take has no direct render settings")
 
     removed_ref_uuids = {
@@ -2566,14 +3027,16 @@ def remove_render_settings(scene, take_uuid):
     try:
         for index in reversed(indices):
             take.overrides.remove(index)
+        take.render_output_path = ""
         if affects_active:
             apply_take(scene, active_uuid, strict=True)
     except Exception:
         take = find_take(scene, take_uuid)
         if take is not None:
             _replace_override_records(take, snapshots)
+            take.render_output_path = original_output_path
         raise
-    return len(indices)
+    return len(indices) + int(had_output_path)
 
 
 def remove_take_camera(scene, take_uuid):
@@ -2723,25 +3186,17 @@ def _ordered_resolved_entries(resolved):
     """Apply parent pointer paths before paths that traverse those pointers."""
 
     entries = list(resolved.values())
-    render_priority = {
-        "render.engine": -40,
-        "render.image_settings.file_format": -30,
-        "render.image_settings.color_mode": -20,
-        "render.image_settings.color_depth": -10,
-        "view_settings.view_transform": -5,
-        "view_settings.look": -4,
-    }
 
     def sort_key(entry):
         path = entry.override.data_path
-        priority = render_priority.get(path)
-        if priority is not None:
+        render_group = render_setting_group_for_path(path)
+        if render_group is not None:
             try:
                 target = entry.override.target_id
             except ReferenceError:
                 target = None
             if isinstance(target, bpy.types.Scene):
-                return (priority, 0)
+                return _render_setting_sort_key(path)
         try:
             return (_path_depth(path), len(path))
         except TakePathError:

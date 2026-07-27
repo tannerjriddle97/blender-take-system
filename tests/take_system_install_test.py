@@ -8,7 +8,7 @@ import bpy
 
 
 WORKSPACE = Path(__file__).resolve().parents[1]
-ZIP_PATH = WORKSPACE / "dist" / "blender_take_system_phase_6.zip"
+ZIP_PATH = WORKSPACE / "dist" / "blender_take_system_v0_6_1.zip"
 
 
 def require(condition, message):
@@ -49,7 +49,7 @@ require(
     "Installed add-on did not bootstrap Main",
 )
 
-require(module.bl_info["version"] == (0, 6, 0), "Installed version mismatch")
+require(module.bl_info["version"] == (0, 6, 1), "Installed version mismatch")
 require(module.bl_info["blender"] == (4, 0, 0), "Minimum version mismatch")
 
 release_types = (
@@ -70,6 +70,7 @@ release_types = (
     module.operators.TS_OT_flush_recording,
     module.operators.TS_OT_configure_take_camera,
     module.operators.TS_OT_clear_take_camera,
+    module.operators.TS_OT_edit_render_profile,
     module.operators.TS_OT_capture_render_settings,
     module.operators.TS_OT_clear_render_settings,
     module.operators.TS_OT_render_included_takes,

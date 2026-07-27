@@ -2,12 +2,12 @@
 
 This package is an installable Blender 4.0+ addon implementing the persistent
 take data model, manual override capture/resolve/apply engine, and dockable Take
-Manager. Version `0.6.0` adds opt-in automatic recording for the applied
-non-Main take. Supported property edits are observed through the existing
-recent-action tracker, grouped into atomic override batches, and committed after
-a short quiet period. The Phase 5 inherited camera, portable render-settings
-preset, per-take batch controls, and transactional batch still rendering remain
-fully supported.
+Manager. Version `0.6.1` adds an inherited render-profile editor directly to
+each applied take. Main/current settings remain the default; a child can
+independently override engine/sampling, resolution, output/format, film
+transparency, or color management. Version 0.6.0's automatic recording and the
+Phase 5 camera, batch controls, and transactional still rendering remain fully
+supported.
 
 Phase 5 retains v0.4.2's fast per-View-Layer collection enabled-state tracking:
 dirty-datablock indexes, direct cached LayerCollection readers, event-triggered
@@ -17,7 +17,7 @@ depths, sibling isolation, and atomic hierarchy resolution.
 
 ## Install
 
-Install `blender_take_system_phase_6.zip` with:
+Install `blender_take_system_v0_6_1.zip` with:
 
 1. **Edit → Preferences → Add-ons → Install from Disk**
 2. Select the ZIP.
@@ -31,7 +31,8 @@ initialize it lazily when displayed or when they receive a relevant
 dependency-graph update.
 
 Opening v0.4.x take data upgrades its schema in place without replacing existing
-takes or overrides. Version 0.6.0 keeps persistent schema 2; automatic-record
+takes or overrides. Version 0.6.1 keeps persistent schema 2; render profiles
+remain ordinary override records and automatic-record
 snapshots and status are runtime-only, while the resulting ordinary overrides
 save in the `.blend`. The batch-output field starts blank and **Include in
 Batch** defaults on, including for existing takes, so review those toggles before
@@ -86,11 +87,12 @@ to their original takes. Public take creation validates that its proposed
 parent already reaches Main—even for non-active scripting calls—so it cannot
 extend an orphaned or cyclic branch.
 
-### Phase 5 camera and render settings
+### Camera and inherited render profiles
 
 Expand **Selected Take Camera & Render Settings** below Take Manager. Camera
-and preset controls are enabled for the applied take; selecting a different row
-for inspection is not enough.
+and profile controls are enabled for the applied take; selecting a different
+row for inspection is not enough. The output icon on each applied take row opens
+the same render-profile editor.
 
 Press **Configure Camera...**, choose a Camera object in the dialog, and
 confirm. The camera is stored as a normal `Scene.camera` override, so it uses
@@ -105,12 +107,34 @@ The panel displays both the resolved camera and which take supplies it. The
 auditable `Scene.camera` override record remains authoritative for apply,
 inheritance, save/reload, and rendering.
 
-The render preset is captured through the same generic Scene override engine.
-For a new take, press **Initialize Current Settings** before changing Blender's
-render controls. This seeds Main with the inherited values and records the
-same initial values on the child. Make the desired changes, then press **Update
-Current Settings**. Later presses update that take without replacing Main's
-baseline. **Inherit** atomically removes the take's direct preset records.
+Press **Edit Render Profile...**. Main displays every group as the inherited
+default profile. On a child, all groups initially inherit; enable only the
+groups that should be direct on that take. The dialog uses Blender's native
+render controls, so its enum choices and engine-specific ranges remain valid.
+Pressing Apply stores the enabled groups atomically and removes direct records
+for groups switched back off. Cancelling restores the exact pre-dialog live
+settings and writes no override records.
+
+The independently inherited groups are:
+
+- **Engine & Sampling** — render engine; Cycles maximum/minimum adaptive
+  samples, threshold, and denoising; compatible Eevee sampling; or Workbench
+  shading controls;
+- **Resolution & Frame** — width, height, percentage, pixel aspect, frame rate,
+  and frame-rate base;
+- **Output & Format** — Scene output, batch-output override, extension,
+  overwrite/placeholder controls, image format, color mode/depth, compression,
+  and quality;
+- **Film Transparency** — transparent background;
+- **Color Management** — view transform, look, exposure, and gamma.
+
+The values live when the editor opens are the trusted inherited baseline. If a
+child enables a group for the first time, those values seed Main and the edited
+values become the child records. Existing Main records are never replaced by a
+child edit. **Inherit All Render Groups** removes every direct render-profile
+record and clears the take's batch-output override. A legacy non-empty Output
+Override is recognized as a direct Output group when the file is opened in
+v0.6.1.
 
 The portable core preset feature-detects and captures:
 
@@ -119,13 +143,13 @@ The portable core preset feature-detects and captures:
 - Scene output path, file-extension/overwrite/placeholder options, image format,
   color mode/depth, compression, and quality where writable;
 - film transparency and view transform, look, exposure, and gamma;
-- available engine-specific controls: Cycles samples, denoising, adaptive
-  sampling, and threshold; compatible Eevee render samples; or
+- available engine-specific controls: Cycles maximum/minimum samples,
+  denoising, adaptive sampling, and threshold; compatible Eevee render samples; or
   Workbench lighting, color, shadow, cavity, and specular controls.
 
 Blender-version or engine-specific properties that do not exist or cannot be
-stored are omitted. Switching engines and updating the preset captures the
-supported settings exposed by the newly active engine. Because these are
+stored are omitted. Switching engines in the editor exposes and stores the
+supported settings for the newly active engine. Because these are
 ordinary overrides, deeper takes win for conflicting values while all other
 render settings remain inherited and visible in the override inspector.
 
@@ -330,10 +354,11 @@ validated.
 10. For a take-specific camera, keep that take applied, press **Configure
     Camera...** in **Selected Take Camera & Render Settings**, and choose the
     Camera object in the dialog.
-11. Before changing a take's render controls, press **Initialize Current
-    Settings**. Make the changes, then press **Update Current Settings**.
-12. Set **Include in Batch** and, when needed, an **Output Override** for each
-    selected take in **Batch Render Takes**.
+11. Press the applied row's output icon or **Edit Render Profile...**, enable
+    only the render groups that differ on that take, edit them, and Apply.
+12. Set **Include in Batch** for each desired take. Set **Batch Output
+    Override** in the profile's Output group or the Batch Render panel when a
+    take should not derive its destination from Scene Output.
 13. Save the `.blend` when using `//` paths, then press **Render Included
     Takes**. The batch returns to the exact pre-render live scene and manager
     state after all included stills finish.
@@ -380,13 +405,20 @@ Object / Cube / ["finish_code"]
 Right-click capture generates Blender-safe paths automatically, including
 escaped node and modifier names.
 
-## Supported through v0.6.0
+## Supported through v0.6.1
 
 - Main-rooted, UUID-linked arbitrary take hierarchies
 - Stable UUID snapshots across Blender CollectionProperty growth and
   take duplication/deletion
 - Dockable Properties → Scene → Take Manager hierarchy
 - Separate selected and applied take states
+- Main/current render settings as the inherited default profile
+- Per-take render-profile dialog using Blender's native controls
+- Independently inheritable engine/sampling, resolution, output/format,
+  transparency, and color-management groups
+- Cycles maximum/minimum adaptive samples, threshold, and denoising where
+  supported
+- Transactional profile Apply/Cancel with legacy batch-output compatibility
 - Opt-in automatic recording on the applied non-Main take
 - Atomic 0.45-second action grouping with automatic Main-baseline seeding
 - Message-bus wakeups plus indexed dependency-graph observation and a guarded
@@ -437,7 +469,15 @@ scene = bpy.context.scene
 take = engine.create_take(scene, "Red CMF")
 engine.capture_override(scene, bpy.context.object, "location", take.uuid)
 engine.configure_take_camera(scene, take.uuid, bpy.data.objects["Camera"])
-engine.capture_render_settings(scene, take.uuid)
+baseline = engine.snapshot_render_profile(scene)
+scene.render.resolution_x = 1080
+scene.render.resolution_y = 1080
+engine.configure_render_profile(
+    scene,
+    take.uuid,
+    {engine.RENDER_GROUP_RESOLUTION},
+    baseline_values=baseline,
+)
 take.include_in_render = True
 take.render_output_path = "//renders/"
 report = engine.apply_take(scene, take.uuid, strict=True)
@@ -480,6 +520,10 @@ bpy.ops.take_system.render_included_takes()
   Manager's override inspector to audit and remove those records.
 - Some operator-backed or virtual UI controls expose no writable RNA button
   context; use the explicit path operator for those.
+- The render-profile dialog deliberately covers the portable, commonly varied
+  render controls listed above. Engine-specific settings outside that curated
+  set can still be captured through automatic recording, right-click capture,
+  or an explicit RNA path when their value type is supported.
 - Blender does not expose a universal property-diff event. Automatic recording
   therefore has the same curated property coverage as recent-action capture;
   geometry/structure edits, selection/navigation, and animated or driven
@@ -502,7 +546,7 @@ bpy.ops.take_system.render_included_takes()
   are not included.
 
 JSON exchange and drag-and-drop are not included. Take thumbnails/previews are
-deliberately deferred as a stretch goal; version 0.6.0 performs no preview
+deliberately deferred as a stretch goal; version 0.6.1 performs no preview
 generation or background thumbnail maintenance.
 
 The example script
@@ -542,6 +586,10 @@ Blender automatically:
 
 & 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' `
   --background --factory-startup --python-exit-code 1 `
+  --python 'C:\Codex_Playpen\blender-take-system\tests\take_system_render_profile_test.py'
+
+& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' `
+  --background --factory-startup --python-exit-code 1 `
   --python 'C:\Codex_Playpen\blender-take-system\tests\take_system_batch_render_test.py'
 
 & 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' `
@@ -552,16 +600,19 @@ Blender automatically:
 The addon declares Blender 4.0+ compatibility. Automated runs have passed in
 Blender 5.1.2 and Blender 5.2.0 LTS; the declared minimum still needs a real
 Blender 4.x CI/manual lane. The all-tests script runs core, changed-only apply,
-CollectionProperty/UUID stability, hierarchy, Phase 5 camera/render/batch,
-operator, Take Manager, collection-state, recent-action, automatic-recording,
-tracker
-performance/behavior, save/reload, and isolated packaged-install functional
-lanes. Phase 6 coverage exercises eligibility, delayed and forced commits,
+CollectionProperty/UUID stability, hierarchy, camera/render/batch, granular
+render profiles, operator, Take Manager, collection-state, recent-action,
+automatic-recording, tracker performance/behavior, save/reload, and isolated
+packaged-install functional lanes. Render-profile coverage exercises Main
+defaults, partial groups, parent/child inheritance, minimum/maximum sampling,
+legacy output metadata, cancellation, and injected rollback failure. Phase 6
+coverage exercises eligibility, delayed and forced commits,
 grouped transforms, repeated updates, message-bus fallback, frame suppression,
 failure shutdown, save handling, same-take reapply, take switching, undo/redo,
-load, and teardown. Phase 5 coverage exercises camera inheritance, portable preset capture,
-output derivation/collision handling, whole-queue preflight, partial-render
-reporting, and exact restoration after success and injected failures. The
+load, and teardown. Phase 5 coverage exercises camera inheritance, portable
+preset capture, output derivation/collision handling, whole-queue preflight,
+partial-render reporting, and exact restoration after success and injected
+failures. The
 packaged-install lane independently builds a multi-level hierarchy, verifies
 deepest-wins resolution, round-trips per-View-Layer collection and Phase 5
 state, verifies redundant-write suppression, and checks broken paths fail

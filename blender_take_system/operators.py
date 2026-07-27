@@ -3,7 +3,7 @@
 import os
 
 import bpy
-from bpy.props import EnumProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, StringProperty
 
 from . import engine, recent, recording
 
@@ -1033,6 +1033,424 @@ class TS_OT_clear_take_camera(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class TS_OT_edit_render_profile(bpy.types.Operator):
+    """Edit independently inherited render-setting groups in one dialog."""
+
+    bl_idname = "take_system.edit_render_profile"
+    bl_label = "Apply Render Profile"
+    bl_description = (
+        "Edit this applied take's sampling, resolution, output, transparency, "
+        "and color-management overrides"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    take_uuid: StringProperty(options={"HIDDEN"})
+    use_engine_sampling: BoolProperty(
+        name="Override Engine & Sampling",
+        description=(
+            "Store engine and sampling settings directly on this take; "
+            "disable to inherit them"
+        ),
+    )
+    use_resolution: BoolProperty(
+        name="Override Resolution & Frame",
+        description=(
+            "Store resolution, aspect, and frame-rate settings directly on "
+            "this take; disable to inherit them"
+        ),
+    )
+    use_output: BoolProperty(
+        name="Override Output & Format",
+        description=(
+            "Store output path and image-format settings directly on this "
+            "take; disable to inherit them"
+        ),
+    )
+    use_transparency: BoolProperty(
+        name="Override Film Transparency",
+        description=(
+            "Store film transparency directly on this take; disable to "
+            "inherit it"
+        ),
+    )
+    use_color_management: BoolProperty(
+        name="Override Color Management",
+        description=(
+            "Store view transform, look, exposure, and gamma directly on this "
+            "take; disable to inherit them"
+        ),
+    )
+
+    @classmethod
+    def poll(cls, context):
+        if not _poll_editable_scene(cls, context):
+            return False
+        try:
+            if bpy.app.is_job_running("RENDER"):
+                cls.poll_message_set(
+                    "Render profiles cannot be edited while Blender is rendering"
+                )
+                return False
+        except (AttributeError, TypeError):
+            pass
+        return True
+
+    def _take(self, scene):
+        selected = engine.selected_take(scene)
+        requested = self.take_uuid or (
+            selected.uuid if selected is not None else ""
+        )
+        return engine.find_take(scene, requested)
+
+    def _set_group_flags(self, scene, take):
+        direct_groups = engine.direct_render_profile_groups(scene, take)
+        use_all = take.is_main
+        self.use_engine_sampling = (
+            use_all
+            or engine.RENDER_GROUP_ENGINE_SAMPLING in direct_groups
+        )
+        self.use_resolution = (
+            use_all
+            or engine.RENDER_GROUP_RESOLUTION in direct_groups
+        )
+        self.use_output = (
+            use_all
+            or engine.RENDER_GROUP_OUTPUT in direct_groups
+        )
+        self.use_transparency = (
+            use_all
+            or engine.RENDER_GROUP_TRANSPARENCY in direct_groups
+        )
+        self.use_color_management = (
+            use_all
+            or engine.RENDER_GROUP_COLOR_MANAGEMENT in direct_groups
+        )
+
+    def _enabled_groups(self, take):
+        if take.is_main:
+            return set(engine.RENDER_PROFILE_GROUPS)
+        enabled = set()
+        if self.use_engine_sampling:
+            enabled.add(engine.RENDER_GROUP_ENGINE_SAMPLING)
+        if self.use_resolution:
+            enabled.add(engine.RENDER_GROUP_RESOLUTION)
+        if self.use_output:
+            enabled.add(engine.RENDER_GROUP_OUTPUT)
+        if self.use_transparency:
+            enabled.add(engine.RENDER_GROUP_TRANSPARENCY)
+        if self.use_color_management:
+            enabled.add(engine.RENDER_GROUP_COLOR_MANAGEMENT)
+        return enabled
+
+    def invoke(self, context, _event):
+        scene = context.scene
+        take = self._take(scene)
+        if take is None:
+            self.report({"ERROR"}, "No valid take was chosen")
+            return {"CANCELLED"}
+        if scene.take_system.active_take_uuid != take.uuid:
+            self.report(
+                {"ERROR"},
+                "Apply the take before editing its render profile",
+            )
+            return {"CANCELLED"}
+        if not _prepare_recording_for_internal_change(self, scene):
+            return {"CANCELLED"}
+        if recording.active_take(scene) is not None:
+            recording.stop(
+                scene,
+                commit_pending=False,
+                reason="Recording stopped while the render profile is edited",
+            )
+        try:
+            self._render_profile_baseline = engine.snapshot_render_profile(
+                scene
+            )
+            self._render_output_baseline = take.render_output_path
+        except engine.TakeSystemError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        self.take_uuid = take.uuid
+        self._set_group_flags(scene, take)
+        return context.window_manager.invoke_props_dialog(self, width=560)
+
+    def _group_box(
+        self,
+        layout,
+        take,
+        *,
+        property_name,
+        label,
+        icon,
+    ):
+        box = layout.box()
+        header = box.row(align=True)
+        if take.is_main:
+            header.label(text=f"{label} — Default", icon=icon)
+            enabled = True
+        else:
+            header.prop(
+                self,
+                property_name,
+                text=label,
+                icon=icon,
+                toggle=True,
+            )
+            enabled = bool(getattr(self, property_name))
+        controls = box.column(align=True)
+        controls.enabled = enabled
+        return box, controls, enabled
+
+    def _draw_engine_sampling(self, layout, scene, take):
+        _box, controls, _enabled = self._group_box(
+            layout,
+            take,
+            property_name="use_engine_sampling",
+            label="Engine & Sampling",
+            icon="RENDER_STILL",
+        )
+        controls.prop(scene.render, "engine", text="Render Engine")
+        engine_identifier = scene.render.engine
+        if engine_identifier == "CYCLES" and hasattr(scene, "cycles"):
+            cycles = scene.cycles
+            controls.prop(cycles, "samples", text="Max Samples")
+            if hasattr(cycles, "use_adaptive_sampling"):
+                controls.prop(
+                    cycles,
+                    "use_adaptive_sampling",
+                    text="Adaptive Sampling",
+                )
+            adaptive = controls.column(align=True)
+            adaptive.enabled = bool(
+                getattr(cycles, "use_adaptive_sampling", False)
+            )
+            if hasattr(cycles, "adaptive_min_samples"):
+                adaptive.prop(
+                    cycles,
+                    "adaptive_min_samples",
+                    text="Min Samples",
+                )
+            if hasattr(cycles, "adaptive_threshold"):
+                adaptive.prop(
+                    cycles,
+                    "adaptive_threshold",
+                    text="Noise Threshold",
+                )
+            if hasattr(cycles, "use_denoising"):
+                controls.prop(cycles, "use_denoising", text="Denoising")
+        elif engine_identifier in {
+            "BLENDER_EEVEE",
+            "BLENDER_EEVEE_NEXT",
+        } and hasattr(scene, "eevee"):
+            if hasattr(scene.eevee, "taa_render_samples"):
+                controls.prop(
+                    scene.eevee,
+                    "taa_render_samples",
+                    text="Render Samples",
+                )
+        elif engine_identifier == "BLENDER_WORKBENCH":
+            shading = scene.display.shading
+            for property_name, label in (
+                ("light", "Lighting"),
+                ("color_type", "Color"),
+                ("show_shadows", "Shadows"),
+                ("show_cavity", "Cavity"),
+                ("show_specular_highlight", "Specular Highlights"),
+            ):
+                if hasattr(shading, property_name):
+                    controls.prop(shading, property_name, text=label)
+
+    def _draw_resolution(self, layout, scene, take):
+        _box, controls, _enabled = self._group_box(
+            layout,
+            take,
+            property_name="use_resolution",
+            label="Resolution & Frame",
+            icon="FULLSCREEN_ENTER",
+        )
+        row = controls.row(align=True)
+        row.prop(scene.render, "resolution_x", text="Width")
+        row.prop(scene.render, "resolution_y", text="Height")
+        controls.prop(scene.render, "resolution_percentage", text="Scale")
+        row = controls.row(align=True)
+        row.prop(scene.render, "pixel_aspect_x", text="Aspect X")
+        row.prop(scene.render, "pixel_aspect_y", text="Y")
+        row = controls.row(align=True)
+        row.prop(scene.render, "fps", text="Frame Rate")
+        row.prop(scene.render, "fps_base", text="Base")
+
+    def _draw_output(self, layout, scene, take):
+        box, controls, _enabled = self._group_box(
+            layout,
+            take,
+            property_name="use_output",
+            label="Output & Format",
+            icon="OUTPUT",
+        )
+        controls.prop(scene.render, "filepath", text="Scene Output")
+        controls.prop(
+            take,
+            "render_output_path",
+            text="Batch Output Override",
+        )
+        controls.label(
+            text="Blank batch output derives a unique take name.",
+            icon="INFO",
+        )
+        controls.prop(
+            scene.render.image_settings,
+            "file_format",
+            text="File Format",
+        )
+        image_settings = scene.render.image_settings
+        row = controls.row(align=True)
+        if hasattr(image_settings, "color_mode"):
+            row.prop(image_settings, "color_mode", text="Color")
+        if hasattr(image_settings, "color_depth"):
+            row.prop(image_settings, "color_depth", text="Depth")
+        if image_settings.file_format == "PNG" and hasattr(
+            image_settings,
+            "compression",
+        ):
+            controls.prop(image_settings, "compression", text="Compression")
+        elif hasattr(image_settings, "quality"):
+            controls.prop(image_settings, "quality", text="Quality")
+        row = controls.row(align=True)
+        row.prop(scene.render, "use_file_extension", text="File Extension")
+        row.prop(scene.render, "use_overwrite", text="Overwrite")
+        controls.prop(scene.render, "use_placeholder", text="Placeholders")
+        if image_settings.file_format == "FFMPEG":
+            box.label(
+                text="Batch rendering accepts still-image formats only.",
+                icon="ERROR",
+            )
+
+    def _draw_transparency(self, layout, scene, take):
+        _box, controls, _enabled = self._group_box(
+            layout,
+            take,
+            property_name="use_transparency",
+            label="Film Transparency",
+            icon="IMAGE_ALPHA",
+        )
+        controls.prop(
+            scene.render,
+            "film_transparent",
+            text="Transparent Background",
+        )
+
+    def _draw_color_management(self, layout, scene, take):
+        _box, controls, _enabled = self._group_box(
+            layout,
+            take,
+            property_name="use_color_management",
+            label="Color Management",
+            icon="COLOR",
+        )
+        view_settings = scene.view_settings
+        controls.prop(view_settings, "view_transform", text="View Transform")
+        controls.prop(view_settings, "look", text="Look")
+        controls.prop(view_settings, "exposure", text="Exposure")
+        controls.prop(view_settings, "gamma", text="Gamma")
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        take = self._take(scene)
+        if take is None:
+            layout.label(text="The selected take no longer exists", icon="ERROR")
+            return
+        if take.is_main:
+            layout.label(
+                text="Main defines the inherited render defaults.",
+                icon="HOME",
+            )
+        else:
+            layout.label(
+                text=(
+                    "Enable only the groups this take should override; "
+                    "disabled groups inherit."
+                ),
+                icon="CON_CHILDOF",
+            )
+        self._draw_engine_sampling(layout, scene, take)
+        self._draw_resolution(layout, scene, take)
+        self._draw_output(layout, scene, take)
+        self._draw_transparency(layout, scene, take)
+        self._draw_color_management(layout, scene, take)
+
+    def execute(self, context):
+        scene = context.scene
+        take = self._take(scene)
+        if take is None:
+            self.report({"ERROR"}, "No valid take was chosen")
+            return {"CANCELLED"}
+        baseline = getattr(self, "_render_profile_baseline", None)
+        try:
+            if baseline is None:
+                baseline = engine.snapshot_render_profile(scene)
+            report = engine.configure_render_profile(
+                scene,
+                take.uuid,
+                self._enabled_groups(take),
+                baseline_values=baseline,
+                batch_output_path=(
+                    take.render_output_path
+                    if take.is_main or self.use_output
+                    else ""
+                ),
+                baseline_batch_output_path=getattr(
+                    self,
+                    "_render_output_baseline",
+                    take.render_output_path,
+                ),
+            )
+        except engine.TakeApplyError as exc:
+            first = exc.report.issues[0].summary()
+            recording.handle_internal_state_change(scene)
+            self.report(
+                {"ERROR"},
+                f"Render profile could not be applied: {first}",
+            )
+            return {"CANCELLED"}
+        except engine.TakeSystemError as exc:
+            recording.handle_internal_state_change(scene)
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        recording.handle_internal_state_change(scene)
+        self.report(
+            {"INFO"},
+            (
+                f"Render profile updated on '{report.take_name}': "
+                f"{report.configured} stored, {report.removed} inherited"
+            ),
+        )
+        return {"FINISHED"}
+
+    def cancel(self, context):
+        scene = getattr(context, "scene", None)
+        if scene is None or not hasattr(scene, "take_system"):
+            return
+        baseline = getattr(self, "_render_profile_baseline", None)
+        if baseline is None:
+            return
+        take = self._take(scene)
+        if take is not None:
+            take.render_output_path = getattr(
+                self,
+                "_render_output_baseline",
+                take.render_output_path,
+            )
+        try:
+            engine.restore_render_profile(scene, baseline)
+        except engine.TakeSystemError as exc:
+            self.report(
+                {"ERROR"},
+                f"Render-profile cancellation could not fully restore: {exc}",
+            )
+        recording.handle_internal_state_change(scene)
+
+
 class TS_OT_capture_render_settings(bpy.types.Operator):
     """Initialize or update the selected take's current render preset."""
 
@@ -1367,6 +1785,7 @@ CLASSES = (
     TS_OT_flush_recording,
     TS_OT_configure_take_camera,
     TS_OT_clear_take_camera,
+    TS_OT_edit_render_profile,
     TS_OT_capture_render_settings,
     TS_OT_clear_render_settings,
     TS_OT_render_included_takes,

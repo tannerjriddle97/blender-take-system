@@ -39,6 +39,8 @@ Features added along the way include:
 - a runtime "Apply Most Recent Action as Overrides" workflow;
 - automatic 0.45-second action grouping over that same tracker and override
   engine;
+- independently inherited v0.6.1 render-profile groups edited through Blender's
+  native controls;
 - per-View-Layer collection enabled/disabled overrides using
   `LayerCollection.exclude`;
 - a full performance pass for large LayerCollection trees;
@@ -52,14 +54,14 @@ ordering improvements, and opt-in take previews/thumbnails.
 
 Current release:
 
-- Add-on version: `0.6.0`
+- Add-on version: `0.6.1`
 - Persistent schema: `2`
 - Declared Blender support: `4.0.0+`
 - Actually tested: Blender `5.1.2` and `5.2.0`
 - Release ZIP:
-  `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_phase_6.zip`
+  `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_v0_6_1.zip`
 - ZIP SHA-256:
-  `B534F86BD192CB03250DFFF1CC6F3EBDDEDB36A39C4DB2D925C88CDFD53DA0DF`
+  `A0AC2C32D06602B7CF31A164887A7A984921BB32289782D3DE3606713BB8F883`
 
 ## Documentation audit
 
@@ -68,10 +70,11 @@ but it is not yet a complete formal developer reference.
 
 What is strong:
 
-- `README.md` is detailed and current through Phase 6. It covers installation,
-  UI access, hierarchy behavior, automatic recording, camera/render workflows,
-  transactional batch behavior, collection states, recent-action capture,
-  performance, limitations, scripting examples, and tests.
+- `README.md` is detailed and current through v0.6.1. It covers installation,
+  UI access, hierarchy behavior, automatic recording, inherited render
+  profiles, camera/render workflows, transactional batch behavior, collection
+  states, recent-action capture, performance, limitations, scripting examples,
+  and tests.
 - Every production module has a module-level description.
 - The important engine entry points and the difficult logic have docstrings or
   explanatory comments. This includes hierarchy validation, path
@@ -141,7 +144,7 @@ Explicit non-goals/current deferrals:
 | `C:\Codex_Playpen\blender-take-system\blender_take_system\README.md` | User guide, behavior reference, limitations, test instructions |
 | `C:\Codex_Playpen\blender-take-system\tests\` | Blender background integration/regression tests and package builder |
 | `C:\Codex_Playpen\blender-take-system\examples\take_system_phase_1_2_demo.py` | Small Main/Red/Blue example scene script |
-| `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_phase_6.zip` | Current installable release |
+| `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_v0_6_1.zip` | Current installable release |
 
 The package builder deliberately includes only:
 
@@ -486,10 +489,28 @@ The camera selection operator uses a dynamic Enum instead of an Object
 `PointerProperty`, because Blender operator properties cannot use the desired
 generic Object pointer behavior reliably.
 
-### Render preset
+### Inherited render profile
 
-`capture_render_settings()` feature-detects available writable paths and stores
-them as ordinary Scene overrides.
+Version 0.6.1 replaces the two-step preset UI with
+`take_system.edit_render_profile`. The underlying
+`capture_render_settings()` API remains for compatibility. Both paths store
+ordinary Scene overrides; there is no parallel render inheritance system.
+
+Main/current values are the default. Child takes start with every group
+inherited and may enable only the groups they need:
+
+- `ENGINE_SAMPLING`;
+- `RESOLUTION`;
+- `OUTPUT`;
+- `TRANSPARENCY`;
+- `COLOR_MANAGEMENT`.
+
+`snapshot_render_profile()` detaches every available live profile value before
+the dialog opens. `configure_render_profile()` receives that trusted baseline,
+stores enabled groups, removes direct records for disabled groups, clears a
+disabled batch-output override, and strictly reapplies the active take in one
+transaction. `restore_render_profile()` provides dependency-ordered Cancel and
+failure restoration. A child never replaces an existing Main baseline.
 
 Portable core:
 
@@ -505,18 +526,22 @@ Portable core:
 
 Engine-specific where available:
 
-- Cycles: samples, denoising, adaptive sampling, threshold.
+- Cycles: maximum/minimum samples, denoising, adaptive sampling, threshold.
 - Eevee/Eevee Next: compatible render sample field.
 - Workbench: lighting, color mode, shadows, cavity, specular highlight.
 
-The UI workflow is:
+The v0.6.1 UI workflow is:
 
 1. Apply/select the take.
-2. Press **Initialize Current Settings** before editing to seed inherited/Main
-   values.
-3. Change Blender render controls.
-4. Press **Update Current Settings**.
-5. Use **Inherit** to atomically remove the take's direct preset records.
+2. Click the row's Output icon or **Edit Render Profile...**.
+3. On a child, enable only the groups that should be direct.
+4. Edit Blender's native render controls and Apply.
+5. Disable a group to inherit it, or use **Inherit All Render Groups**.
+
+Cancel restores the pre-dialog live settings without persistent writes.
+Opening the profile editor stops automatic recording after committing any
+pending action, preventing dialog staging changes from recording themselves.
+A legacy non-empty `render_output_path` is treated as a direct Output group.
 
 ## Transactional batch still rendering
 
@@ -632,6 +657,7 @@ Key operators:
 | `take_system.flush_recording` | Commit the pending recorded action immediately |
 | `take_system.configure_take_camera` | Store direct `Scene.camera` value |
 | `take_system.clear_take_camera` | Inherit camera |
+| `take_system.edit_render_profile` | Edit independently inherited render groups |
 | `take_system.capture_render_settings` | Initialize/update portable preset |
 | `take_system.clear_render_settings` | Inherit render preset |
 | `take_system.render_included_takes` | Synchronous transactional still queue |
@@ -673,8 +699,9 @@ Hot reload logic explicitly reloads submodules when Blender retains an older
 package module during an in-place ZIP update. Teardown removes every handler,
 timer, menu hook, registered class, Scene property, and runtime cache.
 
-Schema 2 added Phase 5 persistent state. Phase 6 adds no persistent fields or
-changed interpretations, so version 0.6.0 retains schema 2. Opening v0.4.x data
+Schema 2 added Phase 5 persistent state. Phases 6 and the v0.6.1 render-profile
+update add no persistent fields or changed interpretations, so version 0.6.1
+retains schema 2. Opening v0.4.x data
 migrates in place:
 
 - existing takes and overrides remain;
@@ -741,9 +768,10 @@ rebuilds/verifies the ZIP, then runs factory-startup background lanes:
 9. `take_system_recording_test.py`
 10. `take_system_recent_perf_test.py`
 11. `take_system_phase5_test.py`
-12. `take_system_batch_render_test.py`
-13. `take_system_persistence_test.py`
-14. isolated `take_system_install_test.py` against the built ZIP
+12. `take_system_render_profile_test.py`
+13. `take_system_batch_render_test.py`
+14. `take_system_persistence_test.py`
+15. isolated `take_system_install_test.py` against the built ZIP
 
 The suite covers:
 
@@ -758,6 +786,9 @@ The suite covers:
   updates, message-bus fallback, failure shutdown, and lifecycle stops;
 - large-scene tracker behavior/performance;
 - camera inheritance and render preset capture/removal;
+- granular render-profile groups, Main baseline seeding, parent/child
+  inheritance, minimum/maximum Cycles samples, legacy output metadata, Cancel,
+  and injected transactional rollback;
 - output derivation and collision handling;
 - whole-queue dry preflight;
 - batch success, injected apply/render/cancellation failure, partial reports,
@@ -767,8 +798,9 @@ The suite covers:
 - clean packaged install and functional use.
 
 All lanes passed in Blender 5.1.2 during earlier releases and in Blender 5.2.0
-for Phase 6 on 2026-07-27. The package hash listed in this handoff was rechecked
-on disk after the final Phase 6 build. Blender 4.x remains a
+for Phase 6 on 2026-07-27. The focused v0.6.1 render-profile lane also passed in
+Blender 5.1.2 and 5.2.0. The package hash listed in this handoff was rechecked
+on disk after the final v0.6.1 build. Blender 4.x remains a
 declared-but-unverified compatibility target.
 
 An isolated non-background Blender 5.2 GUI-context smoke test also verified the
@@ -776,6 +808,10 @@ real record-toggle operator, Undo shutdown/rebaseline, restart after Undo,
 explicit **Commit Pending**, correct one-record Main/child capture, and Stop.
 It used factory-startup data in a hidden process and did not open or mutate the
 user's live `.blend`.
+
+An isolated non-background Blender 5.2 smoke test also opened and drew the real
+render-profile dialog, then verified Main default restoration and child-only
+resolution/transparency application in a factory-startup scene.
 
 Build the release ZIP independently with:
 

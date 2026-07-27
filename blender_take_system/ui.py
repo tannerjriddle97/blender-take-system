@@ -131,14 +131,15 @@ class TS_UL_takes(bpy.types.UIList):
                 else "BLANK1"
             ),
         )
-        row.label(
+        render_profile_slot = row.row(align=True)
+        render_profile_slot.enabled = applied
+        edit_render_profile = render_profile_slot.operator(
+            "take_system.edit_render_profile",
             text="",
-            icon=(
-                "OUTPUT"
-                if engine.take_has_render_settings(scene, item)
-                else "BLANK1"
-            ),
+            icon="OUTPUT",
+            depress=engine.take_has_render_settings(scene, item),
         )
+        edit_render_profile.take_uuid = item.uuid
         row.prop(
             item,
             "include_in_render",
@@ -504,31 +505,43 @@ class TS_PT_take_scene_settings(bpy.types.Panel):
             render_box.label(text=f"Preset error: {exc}", icon="ERROR")
 
         has_render_settings = engine.take_has_render_settings(scene, selected)
+        direct_groups = engine.direct_render_profile_groups(scene, selected)
         render_controls = render_box.column(align=True)
         render_controls.enabled = is_applied
-        render_row = render_controls.row(align=True)
-        capture_render = render_row.operator(
-            "take_system.capture_render_settings",
-            text=(
-                "Update Current Settings"
-                if has_render_settings
-                else "Initialize Current Settings"
-            ),
-            icon="DECORATE_KEYFRAME",
+        edit_profile = render_controls.operator(
+            "take_system.edit_render_profile",
+            text="Edit Render Profile...",
+            icon="OUTPUT",
         )
-        capture_render.take_uuid = selected.uuid
-        clear_render_slot = render_row.row(align=True)
-        clear_render_slot.enabled = has_render_settings
+        edit_profile.take_uuid = selected.uuid
+        clear_render_slot = render_controls.row(align=True)
+        clear_render_slot.enabled = has_render_settings and not selected.is_main
         clear_render = clear_render_slot.operator(
             "take_system.clear_render_settings",
-            text="Inherit",
+            text="Inherit All Render Groups",
             icon="X",
         )
         clear_render.take_uuid = selected.uuid
-        render_box.label(
-            text="Initialize before editing; update after making changes.",
-            icon="INFO",
-        )
+        if selected.is_main:
+            render_box.label(
+                text="Main supplies the inherited default profile.",
+                icon="HOME",
+            )
+        elif direct_groups:
+            group_labels = ", ".join(
+                engine.RENDER_PROFILE_GROUP_LABELS[group_identifier]
+                for group_identifier in engine.RENDER_PROFILE_GROUPS
+                if group_identifier in direct_groups
+            )
+            render_box.label(
+                text=f"Direct groups: {group_labels}",
+                icon="DECORATE_KEYFRAME",
+            )
+        else:
+            render_box.label(
+                text="All render groups inherit from Main/parent.",
+                icon="CON_CHILDOF",
+            )
         if not is_applied:
             layout.label(
                 text="Apply this take before changing its camera or preset.",
