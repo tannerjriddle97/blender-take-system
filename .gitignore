@@ -1,0 +1,22 @@
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Blender and test-generated state
+.take_system_test/
+.take_system_audit/
+*.blend
+*.blend1
+*.blend2
+
+# Build and release artifacts
+dist/
+build/
+*.zip
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
