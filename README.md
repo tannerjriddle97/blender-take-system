@@ -5,7 +5,7 @@ Take Manager. It stores property overrides in a Main-rooted hierarchy so one
 scene can hold material, transform, visibility, camera, and render-setting
 variants without duplicating scene content.
 
-- Current release: **0.5.0 (Phase 5)**
+- Current release: **0.6.0 (Phase 6)**
 - Persistent schema: **2**
 - Supported Blender versions: **4.0+**
 - Verified Blender versions: **5.1.2 and 5.2.0**
@@ -46,8 +46,12 @@ tracked in Git. Release ZIPs should be attached to a GitHub Release.
 
 ## Roadmap
 
-Phases 1–5 are complete. Phase 6 will add opt-in automatic recording while
-preserving strict atomic application, Main baselines, exact typed values, and
-the existing large-scene performance characteristics.
+Phases 1–6 are complete. Phase 6 adds opt-in automatic recording for the
+applied non-Main take. Supported edits are grouped into atomic override
+batches, Main baselines are seeded automatically, and recording fails closed
+on invalid or unsupported changes.
+
+Phase 7 is reserved for later exchange and workflow features such as JSON
+import/export, ordering improvements, and opt-in take previews.
 
 No open-source license has been selected yet.

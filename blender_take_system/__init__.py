@@ -1,13 +1,13 @@
-"""Blender Take System - hierarchical overrides and transactional take rendering."""
+"""Blender Take System - hierarchical overrides and automatic recording."""
 
 bl_info = {
     "name": "Take System",
     "author": "OpenAI",
-    "version": (0, 5, 0),
+    "version": (0, 6, 0),
     "blender": (4, 0, 0),
     "location": "Properties > Scene > Take Manager",
     "description": (
-        "Hierarchical takes with camera, render-setting, and batch-render controls"
+        "Hierarchical takes with automatic override recording and batch rendering"
     ),
     "category": "Scene",
     "doc_url": "",
@@ -27,15 +27,17 @@ if "engine" in locals():
     from . import model as _model
     from . import operators as _operators
     from . import recent as _recent
+    from . import recording as _recording
     from . import ui as _ui
 
     model = importlib.reload(_model)
     engine = importlib.reload(_engine)
     recent = importlib.reload(_recent)
+    recording = importlib.reload(_recording)
     operators = importlib.reload(_operators)
     ui = importlib.reload(_ui)
 else:
-    from . import engine, model, operators, recent, ui
+    from . import engine, model, operators, recent, recording, ui
 
 
 CLASSES = (
@@ -139,9 +141,11 @@ def _safe_bootstrap_scene(scene, force=True):
 @persistent
 def _take_system_load_post(_unused):
     recent.clear_all()
+    recording.clear_runtime()
     engine.clear_runtime_state()
     ready_scene_pointers = set()
     for scene in bpy.data.scenes:
+        recording.reset_after_load(scene)
         bootstrapped = _safe_bootstrap_scene(scene)
         if bootstrapped:
             ready_scene_pointers.add(_scene_pointer(scene))
@@ -150,18 +154,21 @@ def _take_system_load_post(_unused):
     for scene in _displayed_scenes():
         if _scene_pointer(scene) in ready_scene_pointers:
             recent.rebaseline_scene(scene)
+    recording.register_message_bus()
 
 
 @persistent
 def _take_system_depsgraph_update_post(scene, _depsgraph):
     if _safe_bootstrap_scene(scene, force=False):
         recent.handle_depsgraph_update(scene, _depsgraph)
+        recording.note_depsgraph_update(scene)
 
 
 @persistent
 def _take_system_undo_redo_post(_unused):
     # Undo/redo may invalidate cached RNA handles. Discard every tracker, then
     # eagerly rebuild only scenes Blender is currently presenting.
+    recording.handle_undo_redo(tuple(bpy.data.scenes))
     recent.clear_all()
     for scene in _displayed_scenes():
         if _safe_bootstrap_scene(scene, force=False):
@@ -170,7 +177,32 @@ def _take_system_undo_redo_post(_unused):
 
 @persistent
 def _take_system_frame_change_post(scene, _depsgraph=None):
-    recent.defer_scene(scene)
+    recording.handle_frame_change(scene)
+
+
+@persistent
+def _take_system_save_pre(_unused):
+    """Commit settled or pending recording actions before serialization."""
+
+    for scene in tuple(bpy.data.scenes):
+        try:
+            recording.prepare_internal_change(scene)
+        except (
+            engine.TakeSystemError,
+            AttributeError,
+            ReferenceError,
+            RuntimeError,
+        ) as exc:
+            # ``recording.flush`` has already failed closed and exposed the
+            # error in Take Manager. Saving unrelated scene data may continue.
+            try:
+                scene_name = scene.name_full
+            except (AttributeError, ReferenceError):
+                scene_name = "<unavailable>"
+            print(
+                f"Take System: recording stopped before saving "
+                f"'{scene_name}': {exc}"
+            )
 
 
 def _bootstrap_scenes_timer():
@@ -181,6 +213,7 @@ def _bootstrap_scenes_timer():
     except AttributeError:
         return 0.1
     recent.prune_runtime_state(scenes)
+    recording.prune_runtime_state(scenes)
     ready_scene_pointers = set()
     for scene in scenes:
         bootstrapped = _safe_bootstrap_scene(scene, force=False)
@@ -194,6 +227,17 @@ def _bootstrap_scenes_timer():
     # Their recent-action trackers remain lazy until the scene becomes active
     # or receives an actual dependency-graph update.
     return _BOOTSTRAP_POLL_INTERVAL
+
+
+def _take_system_recording_timer():
+    """Commit settled Phase 6 actions outside depsgraph handler restrictions."""
+
+    try:
+        scenes = tuple(bpy.data.scenes)
+    except AttributeError:
+        return recording.TIMER_INTERVAL
+    recording.tick(scenes)
+    return recording.TIMER_INTERVAL
 
 
 def _teardown_registration():
@@ -221,8 +265,13 @@ def _teardown_registration():
         bpy.app.handlers.frame_change_post.remove(
             _take_system_frame_change_post
         )
+    if _take_system_save_pre in bpy.app.handlers.save_pre:
+        bpy.app.handlers.save_pre.remove(_take_system_save_pre)
     if bpy.app.timers.is_registered(_bootstrap_scenes_timer):
         bpy.app.timers.unregister(_bootstrap_scenes_timer)
+    if bpy.app.timers.is_registered(_take_system_recording_timer):
+        bpy.app.timers.unregister(_take_system_recording_timer)
+    recording.unregister_message_bus()
 
     if hasattr(bpy.types.Scene, "take_system"):
         del bpy.types.Scene.take_system
@@ -236,6 +285,7 @@ def _teardown_registration():
     _BOOTSTRAP_WARNED_SCENES.clear()
     operators.clear_runtime_caches()
     recent.clear_all()
+    recording.clear_runtime()
     engine.clear_runtime_state()
 
 
@@ -265,16 +315,25 @@ def register():
             bpy.app.handlers.frame_change_post.append(
                 _take_system_frame_change_post
             )
+        if _take_system_save_pre not in bpy.app.handlers.save_pre:
+            bpy.app.handlers.save_pre.append(_take_system_save_pre)
         # Dynamic menu callbacks do not expose a stable public membership API
         # on every 4.x version.
         bpy.types.UI_MT_button_context_menu.append(
             operators.draw_button_context_menu
         )
         _MENU_ATTACHED = True
+        recording.register_message_bus()
         if not bpy.app.timers.is_registered(_bootstrap_scenes_timer):
             bpy.app.timers.register(
                 _bootstrap_scenes_timer,
                 first_interval=0.0,
+                persistent=True,
+            )
+        if not bpy.app.timers.is_registered(_take_system_recording_timer):
+            bpy.app.timers.register(
+                _take_system_recording_timer,
+                first_interval=recording.TIMER_INTERVAL,
                 persistent=True,
             )
     except Exception:

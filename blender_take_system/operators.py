@@ -5,7 +5,7 @@ import os
 import bpy
 from bpy.props import EnumProperty, StringProperty
 
-from . import engine, recent
+from . import engine, recent, recording
 
 
 CAPTURE_ID_TYPES = (
@@ -45,6 +45,20 @@ def _poll_editable_scene(operator_class, context):
     error = _scene_editability_error(context)
     if error:
         operator_class.poll_message_set(error)
+        return False
+    return True
+
+
+def _prepare_recording_for_internal_change(operator, scene):
+    """Commit pending auto-record data before an add-on operation."""
+
+    try:
+        recording.prepare_internal_change(scene)
+    except engine.TakeSystemError as exc:
+        operator.report(
+            {"ERROR"},
+            f"Pending automatic recording could not be committed: {exc}",
+        )
         return False
     return True
 
@@ -255,6 +269,8 @@ class TS_OT_add_take(bpy.types.Operator):
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         try:
             main = engine.ensure_main_take(context.scene)
             if self.parent_mode == "ACTIVE":
@@ -282,7 +298,7 @@ class TS_OT_add_take(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         self.report(
             {"INFO"},
             f"Created take '{take.name}'. Add overrides before editing a property.",
@@ -317,6 +333,8 @@ class TS_OT_apply_take(bpy.types.Operator):
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         requested = self.take_uuid or context.scene.take_system.active_take_uuid
         try:
             report = engine.apply_take(context.scene, requested, strict=True)
@@ -330,7 +348,7 @@ class TS_OT_apply_take(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         self.report(
             {"INFO"},
             f"Applied '{report.take_name}' ({report.applied} override(s))",
@@ -351,6 +369,8 @@ class TS_OT_apply_active_take(bpy.types.Operator):
         return _poll_editable_scene(cls, context)
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         try:
             report = engine.apply_take(
                 context.scene,
@@ -367,7 +387,7 @@ class TS_OT_apply_active_take(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         self.report(
             {"INFO"},
             f"Applied '{report.take_name}' ({report.applied} override(s))",
@@ -396,6 +416,8 @@ class TS_OT_apply_selected_take(bpy.types.Operator):
         return True
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         selected = engine.selected_take(context.scene)
         if selected is None:
             self.report({"ERROR"}, "No take is selected")
@@ -416,7 +438,7 @@ class TS_OT_apply_selected_take(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         self.report(
             {"INFO"},
             f"Applied '{report.take_name}' ({report.applied} override(s))",
@@ -441,6 +463,8 @@ class TS_OT_duplicate_take(bpy.types.Operator):
         return _poll_editable_scene(cls, context)
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         selected = engine.selected_take(context.scene)
         requested = self.take_uuid or (
             selected.uuid if selected is not None else ""
@@ -458,7 +482,7 @@ class TS_OT_duplicate_take(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         self.report({"INFO"}, f"Duplicated take as '{duplicate.name}'")
         return {"FINISHED"}
 
@@ -487,6 +511,8 @@ class TS_OT_delete_take(bpy.types.Operator):
         return context.window_manager.invoke_confirm(self, _event)
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         selected = engine.selected_take(context.scene)
         requested = self.take_uuid or (
             selected.uuid if selected is not None else ""
@@ -500,7 +526,7 @@ class TS_OT_delete_take(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         self.report({"INFO"}, "Take deleted; children were preserved")
         return {"FINISHED"}
 
@@ -543,6 +569,8 @@ class TS_OT_reparent_take(bpy.types.Operator):
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         try:
             take = engine.reparent_take(
                 context.scene,
@@ -556,7 +584,7 @@ class TS_OT_reparent_take(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         parent = engine.find_take(context.scene, take.parent_uuid)
         parent_name = parent.name if parent is not None else "<missing>"
         self.report({"INFO"}, f"Moved '{take.name}' under '{parent_name}'")
@@ -581,6 +609,8 @@ class TS_OT_remove_override(bpy.types.Operator):
         return _poll_editable_scene(cls, context)
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         try:
             engine.remove_override(
                 context.scene,
@@ -594,7 +624,7 @@ class TS_OT_remove_override(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         self.report({"INFO"}, "Take override removed")
         return {"FINISHED"}
 
@@ -682,7 +712,14 @@ class TS_OT_capture_recent_action(bpy.types.Operator):
             )
             return {"CANCELLED"}
         try:
-            report = recent.capture_pending(scene, applied.uuid)
+            if recording.active_take(scene) is not None:
+                report = recording.flush(scene, force=True)
+                if report is None:
+                    raise engine.TakeSystemError(
+                        "No supported recording action is pending"
+                    )
+            else:
+                report = recent.capture_pending(scene, applied.uuid)
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
@@ -694,6 +731,97 @@ class TS_OT_capture_recent_action(bpy.types.Operator):
                 f"on '{report.take_name}'"
             ),
         )
+        return {"FINISHED"}
+
+
+class TS_OT_toggle_recording(bpy.types.Operator):
+    """Start or stop automatic recording on the applied child take."""
+
+    bl_idname = "take_system.toggle_recording"
+    bl_label = "Toggle Automatic Recording"
+    bl_description = (
+        "Automatically store supported property actions on the applied "
+        "non-Main take"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    take_uuid: StringProperty(options={"HIDDEN"})
+
+    @classmethod
+    def poll(cls, context):
+        return _poll_editable_scene(cls, context)
+
+    def execute(self, context):
+        scene = context.scene
+        selected = engine.selected_take(scene)
+        requested = self.take_uuid or (
+            selected.uuid if selected is not None else ""
+        )
+        take = engine.find_take(scene, requested)
+        if take is None:
+            self.report({"ERROR"}, "No valid take was chosen for recording")
+            return {"CANCELLED"}
+        if take.is_main:
+            self.report({"ERROR"}, "Main cannot record automatic overrides")
+            return {"CANCELLED"}
+        if scene.take_system.active_take_uuid != take.uuid:
+            self.report(
+                {"ERROR"},
+                "Apply the take before enabling automatic recording",
+            )
+            return {"CANCELLED"}
+        try:
+            if take.is_recording:
+                runtime = recording.stop(
+                    scene,
+                    commit_pending=True,
+                    reason=f"Automatic recording stopped on '{take.name}'",
+                )
+                message = runtime.message
+            else:
+                recording.start(scene, take.uuid)
+                message = f"Automatic recording started on '{take.name}'"
+        except engine.TakeSystemError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        self.report({"INFO"}, message)
+        return {"FINISHED"}
+
+
+class TS_OT_flush_recording(bpy.types.Operator):
+    """Commit the current automatic-record action before its timer fires."""
+
+    bl_idname = "take_system.flush_recording"
+    bl_label = "Commit Pending Recording"
+    bl_description = "Commit the pending grouped automatic-record action now"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        if not _poll_editable_scene(cls, context):
+            return False
+        if recording.active_take(context.scene) is None:
+            cls.poll_message_set("Automatic recording is not active")
+            return False
+        return True
+
+    def execute(self, context):
+        try:
+            report = recording.flush(context.scene, force=True)
+        except engine.TakeSystemError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        if report is None:
+            self.report({"INFO"}, "No supported recording action is pending")
+        else:
+            self.report(
+                {"INFO"},
+                (
+                    f"Recorded {report.captured} "
+                    f"propert{'y' if report.captured == 1 else 'ies'} "
+                    f"on '{report.take_name}'"
+                ),
+            )
         return {"FINISHED"}
 
 
@@ -812,6 +940,8 @@ class TS_OT_configure_take_camera(bpy.types.Operator):
         self.layout.prop(self, "camera_choice")
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         selected = engine.selected_take(context.scene)
         requested = self.take_uuid or (
             selected.uuid if selected is not None else ""
@@ -851,7 +981,7 @@ class TS_OT_configure_take_camera(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         camera_name = chosen_camera.name if chosen_camera is not None else "None"
         self.report(
             {"INFO"},
@@ -883,6 +1013,8 @@ class TS_OT_clear_take_camera(bpy.types.Operator):
         )
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         selected = engine.selected_take(context.scene)
         requested = self.take_uuid or (
             selected.uuid if selected is not None else ""
@@ -896,7 +1028,7 @@ class TS_OT_clear_take_camera(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         self.report({"INFO"}, "Direct take camera removed; parent is inherited")
         return {"FINISHED"}
 
@@ -919,6 +1051,8 @@ class TS_OT_capture_render_settings(bpy.types.Operator):
         return _selected_applied_take(cls, context) is not None
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         selected = engine.selected_take(context.scene)
         requested = self.take_uuid or (
             selected.uuid if selected is not None else ""
@@ -938,7 +1072,7 @@ class TS_OT_capture_render_settings(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         self.report(
             {"INFO"},
             f"Captured {report.captured} render settings on "
@@ -968,6 +1102,8 @@ class TS_OT_clear_render_settings(bpy.types.Operator):
         )
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         selected = engine.selected_take(context.scene)
         requested = self.take_uuid or (
             selected.uuid if selected is not None else ""
@@ -987,7 +1123,7 @@ class TS_OT_clear_render_settings(bpy.types.Operator):
         except engine.TakeSystemError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         self.report({"INFO"}, f"Removed {removed} direct render settings")
         return {"FINISHED"}
 
@@ -1049,12 +1185,14 @@ class TS_OT_render_included_takes(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
+        if not _prepare_recording_for_internal_change(self, scene):
+            return {"CANCELLED"}
         try:
             with recent.suspend_tracking():
                 report = engine.render_take_batch(scene, _render_still)
         except engine.BatchRenderError as exc:
             report = exc.report
-            recent.handle_internal_state_change(scene)
+            recording.handle_internal_state_change(scene)
             suffix = (
                 f"; {len(report.rendered)} file(s) were already written"
                 if report.rendered
@@ -1065,10 +1203,10 @@ class TS_OT_render_included_takes(bpy.types.Operator):
             self.report({"ERROR"}, f"{exc}{suffix}")
             return {"CANCELLED"}
         except engine.TakeSystemError as exc:
-            recent.handle_internal_state_change(scene)
+            recording.handle_internal_state_change(scene)
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        recent.handle_internal_state_change(scene)
+        recording.handle_internal_state_change(scene)
         self.report(
             {"INFO"},
             f"Rendered {len(report.rendered)} included take(s); scene restored",
@@ -1096,6 +1234,8 @@ class TS_OT_capture_button_override(bpy.types.Operator):
         )
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         try:
             target_id, data_path = _button_target_and_path(context)
             result = engine.capture_override(
@@ -1108,7 +1248,7 @@ class TS_OT_capture_button_override(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         action = "Added" if result.created else "Updated"
         suffix = "; Main baseline stored" if result.main_seeded else ""
         self.report(
@@ -1163,6 +1303,8 @@ class TS_OT_capture_path_override(bpy.types.Operator):
         layout.prop(self, "data_path")
 
     def execute(self, context):
+        if not _prepare_recording_for_internal_change(self, context.scene):
+            return {"CANCELLED"}
         try:
             target_id = engine.find_id_by_name(
                 self.target_id_type,
@@ -1179,7 +1321,7 @@ class TS_OT_capture_path_override(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
-        recent.handle_internal_state_change(context.scene)
+        recording.handle_internal_state_change(context.scene)
         action = "Added" if result.created else "Updated"
         suffix = "; Main baseline stored" if result.main_seeded else ""
         self.report(
@@ -1221,6 +1363,8 @@ CLASSES = (
     TS_OT_remove_override,
     TS_OT_open_manager,
     TS_OT_capture_recent_action,
+    TS_OT_toggle_recording,
+    TS_OT_flush_recording,
     TS_OT_configure_take_camera,
     TS_OT_clear_take_camera,
     TS_OT_capture_render_settings,

@@ -132,7 +132,10 @@ class TS_PG_Take(bpy.types.PropertyGroup):
     is_main: BoolProperty(name="Is Main", default=False, options={"HIDDEN"})
     is_recording: BoolProperty(
         name="Record",
-        description="Reserved for the Phase 6 auto-take recorder",
+        description=(
+            "Automatically capture supported user property changes while this "
+            "non-Main take is applied"
+        ),
         default=False,
     )
     include_in_render: BoolProperty(

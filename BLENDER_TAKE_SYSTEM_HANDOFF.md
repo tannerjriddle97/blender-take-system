@@ -1,6 +1,6 @@
-# Blender Take System - Phase 5 Engineering Handoff
+# Blender Take System - Phase 6 Engineering Handoff
 
-Last updated: 2026-07-26
+Last updated: 2026-07-27
 
 This is the self-contained project handoff for the Blender Take System add-on in
 `C:\Codex_Playpen\blender-take-system`. It is written so a new Codex chat can continue development
@@ -11,7 +11,7 @@ Suggested first message in a new chat:
 > Continue the Blender Take System project described in
 > `C:\Codex_Playpen\blender-take-system\BLENDER_TAKE_SYSTEM_HANDOFF.md`. Read that file, the
 > original product prompt, and the add-on README before changing code. Preserve
-> the Phase 5 invariants and run the relevant Blender background tests. Use the
+> the Phase 6 invariants and run the relevant Blender background tests. Use the
 > Blender MCP connection for live inspection when available; do not use desktop
 > control unless I explicitly authorize it in the new chat.
 
@@ -23,7 +23,7 @@ hierarchy of child takes. A take stores property-value overrides without
 duplicating the scene. Applying a take resolves Main-to-leaf inheritance and
 writes the deepest value for each logical property.
 
-Phases 1 through 5 are complete:
+Phases 1 through 6 are complete:
 
 1. Persistent scene-local data model and Main bootstrap.
 2. Generic manual property capture and apply/resolve engine.
@@ -31,10 +31,14 @@ Phases 1 through 5 are complete:
 4. Arbitrary parent/child inheritance with integrity validation.
 5. Inherited camera/render-setting overrides and transactional still batch
    rendering.
+6. Opt-in automatic recording for supported edits on the applied non-Main
+   take.
 
 Features added along the way include:
 
 - a runtime "Apply Most Recent Action as Overrides" workflow;
+- automatic 0.45-second action grouping over that same tracker and override
+  engine;
 - per-View-Layer collection enabled/disabled overrides using
   `LayerCollection.exclude`;
 - a full performance pass for large LayerCollection trees;
@@ -43,19 +47,19 @@ Features added along the way include:
   payloads;
 - changed-only application to avoid redundant RNA setter/depsgraph work.
 
-The next planned milestone is Phase 6: automatic recording mode. Take previews
-and thumbnails are intentionally deferred to the Phase 7/stretch backlog.
+The next planned milestone is the Phase 7/stretch backlog: JSON exchange,
+ordering improvements, and opt-in take previews/thumbnails.
 
 Current release:
 
-- Add-on version: `0.5.0`
+- Add-on version: `0.6.0`
 - Persistent schema: `2`
 - Declared Blender support: `4.0.0+`
 - Actually tested: Blender `5.1.2` and `5.2.0`
 - Release ZIP:
-  `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_phase_5.zip`
+  `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_phase_6.zip`
 - ZIP SHA-256:
-  `9C35B54B94FE85897170BBAC7EDDBC8175A50058403A8E88710F2873D3EA00C2`
+  `B534F86BD192CB03250DFFF1CC6F3EBDDEDB36A39C4DB2D925C88CDFD53DA0DF`
 
 ## Documentation audit
 
@@ -64,10 +68,10 @@ but it is not yet a complete formal developer reference.
 
 What is strong:
 
-- `README.md` is detailed and current through Phase 5. It covers installation,
-  UI access, hierarchy behavior, camera/render workflows, transactional batch
-  behavior, collection states, recent-action capture, performance, limitations,
-  scripting examples, and tests.
+- `README.md` is detailed and current through Phase 6. It covers installation,
+  UI access, hierarchy behavior, automatic recording, camera/render workflows,
+  transactional batch behavior, collection states, recent-action capture,
+  performance, limitations, scripting examples, and tests.
 - Every production module has a module-level description.
 - The important engine entry points and the difficult logic have docstrings or
   explanatory comments. This includes hierarchy validation, path
@@ -121,7 +125,6 @@ Explicit non-goals/current deferrals:
 - duplicating objects/materials as the override mechanism;
 - background render-queue UI parity with Cinema 4D;
 - animation/video batch rendering;
-- Phase 6 auto recording in the current release;
 - JSON exchange, drag-and-drop reordering, and thumbnails until a later phase.
 
 ## Repository and artifact map
@@ -132,12 +135,13 @@ Explicit non-goals/current deferrals:
 | `C:\Codex_Playpen\blender-take-system\blender_take_system\model.py` | Persistent Blender `PropertyGroup` schema |
 | `C:\Codex_Playpen\blender-take-system\blender_take_system\engine.py` | Hierarchy, paths, typed storage, capture, resolve/apply, camera/render helpers, batch transaction |
 | `C:\Codex_Playpen\blender-take-system\blender_take_system\recent.py` | Runtime-only recent-action diff tracker and large-scene collection performance path |
+| `C:\Codex_Playpen\blender-take-system\blender_take_system\recording.py` | Phase 6 eligibility, message-bus wakeups, quiet-period commits, lifecycle reconciliation, runtime status |
 | `C:\Codex_Playpen\blender-take-system\blender_take_system\operators.py` | Undoable UI operators, capture menu hook, camera/render dialogs, synchronous render callback |
 | `C:\Codex_Playpen\blender-take-system\blender_take_system\ui.py` | Properties-editor UI lists and panels |
 | `C:\Codex_Playpen\blender-take-system\blender_take_system\README.md` | User guide, behavior reference, limitations, test instructions |
 | `C:\Codex_Playpen\blender-take-system\tests\` | Blender background integration/regression tests and package builder |
 | `C:\Codex_Playpen\blender-take-system\examples\take_system_phase_1_2_demo.py` | Small Main/Red/Blue example scene script |
-| `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_phase_5.zip` | Current installable release |
+| `C:\Codex_Playpen\blender-take-system\dist\blender_take_system_phase_6.zip` | Current installable release |
 
 The package builder deliberately includes only:
 
@@ -145,6 +149,7 @@ The package builder deliberately includes only:
 - `model.py`
 - `engine.py`
 - `recent.py`
+- `recording.py`
 - `operators.py`
 - `ui.py`
 - `README.md`
@@ -201,7 +206,9 @@ All core take data is stored in the `.blend` through
 - `uuid`: stable identity.
 - `parent_uuid`: UUID link; empty only for Main.
 - `is_main`: canonical Main marker.
-- `is_recording`: reserved UI/state field for Phase 6; it does not record yet.
+- `is_recording`: persisted flag identifying the currently armed take. Load,
+  undo/redo, take switches, and teardown clear it fail-closed; runtime snapshots
+  and status remain outside the `.blend`.
 - `include_in_render`: Phase 5 batch toggle, default `True`.
 - `render_output_path`: optional per-take batch filepath/directory override.
 - `overrides`: direct records owned by this take.
@@ -338,8 +345,42 @@ It deliberately does not infer geometry changes, structure creation/deletion,
 selection/navigation, animated/driven values, or ambiguous DATA-linked material
 slot assignment as retroactive value overrides.
 
-This is not Phase 6 recording. It captures only when the user presses the
-button.
+### Phase 6 automatic recording
+
+`recording.py` turns the same recent-action observations into an opt-in
+continuous workflow. Only the applied non-Main take may record. The record dot
+or **Start Recording** captures a trusted tracker baseline; each supported
+change group is committed after the existing `0.45` second quiet window.
+
+The dependency graph remains the authoritative indexed observer. Persistent RNA
+message-bus subscriptions provide low-cost wakeups for common property types.
+If Blender sends a message-bus signal without a matching dependency-graph
+callback, the recurring recording timer performs one forced observation after
+`0.075` seconds. It then returns to the indexed path.
+
+Every commit delegates to `recent.capture_pending()` and
+`engine.capture_change_batch()`, preserving one generic override table, Main
+baseline seeding, exact values, prevalidation, and all-or-nothing capture.
+Repeated edits update the same logical override. Runtime status records action
+and property counts plus the latest summary/error; none of that status is
+persistent.
+
+Safety/lifecycle rules:
+
+- take-system operations force-commit a pending user group, perform guarded
+  internal writes, then rebaseline;
+- reapplying the same take keeps recording armed;
+- applying another take clears the prior record flag and stops that session;
+- frame changes defer observation, while undo/redo and file load stop every
+  recorder and rebuild safe baselines;
+- save-pre force-commits pending supported edits before serialization;
+- any capture/validation failure writes no partial batch, disables recording,
+  rebaselines, and exposes the error in Take Manager.
+
+Timer-driven commits cannot create their own named Blender undo entries. The
+explicit **Commit Pending** operator provides an operator/undo boundary when one
+is required. Undo/redo always stops recording so restored scene state is never
+captured back into the take.
 
 ### Collection enabled state
 
@@ -423,8 +464,8 @@ Render properties are ordered so the engine, format, color mode/depth, view
 transform, and look establish their dependent RNA state before subordinate
 values are assigned.
 
-`engine.is_applying()` exposes an apply guard so runtime trackers and future
-Phase 6 handlers can ignore programmatic take writes.
+`engine.is_applying()` exposes an apply guard so runtime trackers and the Phase
+6 recorder ignore programmatic take writes.
 
 ## Camera and render settings
 
@@ -587,6 +628,8 @@ Key operators:
 | `take_system.remove_override` | Remove one direct record |
 | `take_system.open_manager` | Convert current area to Properties/Scene |
 | `take_system.capture_recent_action` | Persist recent supported change group |
+| `take_system.toggle_recording` | Start/stop automatic recording |
+| `take_system.flush_recording` | Commit the pending recorded action immediately |
 | `take_system.configure_take_camera` | Store direct `Scene.camera` value |
 | `take_system.clear_take_camera` | Inherit camera |
 | `take_system.capture_render_settings` | Initialize/update portable preset |
@@ -607,17 +650,21 @@ inspected-but-unapplied variant.
 - all operators and panels;
 - `Scene.take_system`;
 - button-context menu entry;
-- load, dependency-graph, undo, redo, and frame-change handlers;
-- a lightweight recurring Scene bootstrap timer.
+- load, save-pre, dependency-graph, undo, redo, and frame-change handlers;
+- lightweight recurring Scene bootstrap and recording timers;
+- persistent RNA message-bus subscriptions used as recording wakeups.
 
 Important lifecycle behavior:
 
-- load repairs persistent data for all scenes;
+- load repairs persistent data for all scenes and clears every recording flag;
 - the comparatively expensive recent-action baseline is built eagerly only for
   scenes displayed in a window;
 - non-displayed scenes initialize tracking lazily;
-- undo/redo discards cached RNA handles and rebaselines displayed scenes;
+- undo/redo stops recording, discards cached RNA handles, and rebaselines
+  displayed scenes;
 - frame changes temporarily defer tracking to avoid evaluation noise;
+- save-pre commits any pending supported recording group;
+- message-bus subscriptions are restored after load because Blender clears them;
 - the timer catches newly created Scenes because Blender has no dedicated
   scene-added handler;
 - linked read-only scenes are skipped unless locally overridden.
@@ -626,7 +673,9 @@ Hot reload logic explicitly reloads submodules when Blender retains an older
 package module during an in-place ZIP update. Teardown removes every handler,
 timer, menu hook, registered class, Scene property, and runtime cache.
 
-Schema 2 added Phase 5 persistent state. Opening v0.4.x data migrates in place:
+Schema 2 added Phase 5 persistent state. Phase 6 adds no persistent fields or
+changed interpretations, so version 0.6.0 retains schema 2. Opening v0.4.x data
+migrates in place:
 
 - existing takes and overrides remain;
 - camera convenience metadata is synchronized from canonical overrides;
@@ -642,7 +691,7 @@ schema/migration decision and save/reload tests.
 The main large-scene risk was scanning thousands of LayerCollection occurrences
 on dependency-graph updates.
 
-The optimized path in v0.4.2, retained by Phase 5, uses:
+The optimized path in v0.4.2, retained by Phases 5 and 6, uses:
 
 - cached direct LayerCollection handles/readers;
 - per-datablock reverse indexes;
@@ -689,11 +738,12 @@ rebuilds/verifies the ZIP, then runs factory-startup background lanes:
 6. `take_system_ui_test.py`
 7. `take_system_collection_state_test.py`
 8. `take_system_recent_action_test.py`
-9. `take_system_recent_perf_test.py`
-10. `take_system_phase5_test.py`
-11. `take_system_batch_render_test.py`
-12. `take_system_persistence_test.py`
-13. isolated `take_system_install_test.py` against the built ZIP
+9. `take_system_recording_test.py`
+10. `take_system_recent_perf_test.py`
+11. `take_system_phase5_test.py`
+12. `take_system_batch_render_test.py`
+13. `take_system_persistence_test.py`
+14. isolated `take_system_install_test.py` against the built ZIP
 
 The suite covers:
 
@@ -704,6 +754,8 @@ The suite covers:
 - operators and Properties UI;
 - nested and multiply-linked LayerCollection state;
 - recent-action grouping/validation;
+- automatic-record eligibility, delayed/grouped/forced commits, repeated
+  updates, message-bus fallback, failure shutdown, and lifecycle stops;
 - large-scene tracker behavior/performance;
 - camera inheritance and render preset capture/removal;
 - output derivation and collision handling;
@@ -714,9 +766,16 @@ The suite covers:
 - save/reload persistence;
 - clean packaged install and functional use.
 
-All lanes passed in Blender 5.1.2 and Blender 5.2.0 during Phase 5 development.
-The package hash listed in this handoff was rechecked on disk on 2026-07-26.
-Blender 4.x remains a declared-but-unverified compatibility target.
+All lanes passed in Blender 5.1.2 during earlier releases and in Blender 5.2.0
+for Phase 6 on 2026-07-27. The package hash listed in this handoff was rechecked
+on disk after the final Phase 6 build. Blender 4.x remains a
+declared-but-unverified compatibility target.
+
+An isolated non-background Blender 5.2 GUI-context smoke test also verified the
+real record-toggle operator, Undo shutdown/rebaseline, restart after Undo,
+explicit **Commit Pending**, correct one-record Main/child capture, and Stop.
+It used factory-startup data in a hidden process and did not open or mutate the
+user's live `.blend`.
 
 Build the release ZIP independently with:
 
@@ -776,46 +835,40 @@ When updating a live user Scene:
 - Batch output file side effects are outside Blender undo and transaction
   rollback.
 
-## Phase 6 guidance
+## Phase 6 completion notes
 
-The original Phase 6 request is automatic recording mode via message bus plus
-dependency-graph observation. The existing `is_recording` field and
-`engine.is_applying()` guard were reserved for it.
+Phase 6 implements the original automatic-recording request through
+`recording.py`, `recent.py`, and the existing generic override engine. The key
+design decision is immediate commit after the existing `0.45` second action
+quiet period, with an explicit **Commit Pending** control for users who want to
+close the group sooner.
 
-Recommended Phase 6 interpretation:
+The implementation preserves all reserved invariants:
 
-- recording is opt-in and valid only for a non-Main applied take;
-- programmatic take apply, undo/redo, frame evaluation, load/bootstrap, and
-  internal writes must never self-record;
-- reuse the existing supported-property discovery, dirty indexes, detached
-  values, validation, and `capture_change_batch()` path;
-- capture a trusted baseline at recording start/apply;
-- group one user action atomically;
-- require a Main baseline for every child override;
-- stop or rebaseline safely on take switch, undo/redo, topology change, target
-  deletion, or unsupported values;
-- preserve the v0.4.2 large-scene performance characteristics;
-- clearly expose what was recorded and what was ignored;
-- test accidental recursive capture and partial failure aggressively.
+- recording is opt-in and only valid for the applied non-Main take;
+- programmatic apply/render/bootstrap writes, frame evaluation, undo/redo, and
+  load cannot self-record;
+- supported-property discovery, dirty indexes, detached values, validation, and
+  `capture_change_batch()` are reused rather than duplicated;
+- a trusted baseline is captured at start/reapply;
+- every action group is prevalidated and persisted atomically with a Main
+  baseline;
+- take switches, undo/redo, load, save, and commit errors reconcile fail-closed;
+- normal large-collection observation retains the optimized indexed/direct
+  reader path;
+- Take Manager reports pending, captured, stopped, and failure states.
 
-Important design question for the next phase: whether each observed action is
-committed immediately or held briefly for UI confirmation. The original C4D
-parity goal suggests immediate commit while the record dot is active, but it
-must still be one Blender undoable action where Blender's handler restrictions
-allow. Handler-time mutations and undo integration should be prototyped in an
-isolated Scene before finalizing the UX.
+The Phase 6 regression lane exercises applied/selected eligibility,
+single-property and grouped transform recording, duplicate suppression,
+message-bus fallback, Main immutability, failure atomicity, operator stop/flush,
+save-pre commit, same-take reapply, take switching, frame suppression,
+undo/redo, load, registration, and clean teardown. The existing recent-action
+performance lane still passes unchanged.
 
-Suggested new tests:
-
-- record toggle eligibility and applied/selected mismatch;
-- single-property and grouped transform recording;
-- no self-record during take apply;
-- no record on frame/animation evaluation;
-- take switch, undo/redo, and load rebaseline;
-- deleted/renamed target and topology invalidation;
-- shared material-slot ambiguity;
-- large LayerCollection performance with recording enabled;
-- save/reload proving only persistent overrides save, not runtime snapshots.
+Known undo boundary: timer callbacks cannot safely add an independent named
+Blender undo step. **Commit Pending**, start/stop, and the other direct UI
+commands remain Blender operators with `UNDO`; any undo/redo event stops the
+recorder and rebaselines before observation resumes.
 
 ## Phase 7/stretch backlog
 

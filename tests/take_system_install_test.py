@@ -8,7 +8,7 @@ import bpy
 
 
 WORKSPACE = Path(__file__).resolve().parents[1]
-ZIP_PATH = WORKSPACE / "dist" / "blender_take_system_phase_5.zip"
+ZIP_PATH = WORKSPACE / "dist" / "blender_take_system_phase_6.zip"
 
 
 def require(condition, message):
@@ -49,7 +49,7 @@ require(
     "Installed add-on did not bootstrap Main",
 )
 
-require(module.bl_info["version"] == (0, 5, 0), "Installed version mismatch")
+require(module.bl_info["version"] == (0, 6, 0), "Installed version mismatch")
 require(module.bl_info["blender"] == (4, 0, 0), "Minimum version mismatch")
 
 release_types = (
@@ -66,6 +66,8 @@ release_types = (
     module.operators.TS_OT_remove_override,
     module.operators.TS_OT_open_manager,
     module.operators.TS_OT_capture_recent_action,
+    module.operators.TS_OT_toggle_recording,
+    module.operators.TS_OT_flush_recording,
     module.operators.TS_OT_configure_take_camera,
     module.operators.TS_OT_clear_take_camera,
     module.operators.TS_OT_capture_render_settings,
@@ -456,12 +458,18 @@ require(
     and module._take_system_undo_redo_post not in bpy.app.handlers.redo_post
     and module._take_system_frame_change_post
     not in bpy.app.handlers.frame_change_post
-    and not bpy.app.timers.is_registered(module._bootstrap_scenes_timer),
+    and module._take_system_save_pre not in bpy.app.handlers.save_pre
+    and not bpy.app.timers.is_registered(module._bootstrap_scenes_timer)
+    and not bpy.app.timers.is_registered(
+        module._take_system_recording_timer
+    ),
     "Unregister left a lifecycle callback attached",
 )
 require(
-    module.recent.runtime_state_count() == 0,
-    "Unregister left recent-action runtime state behind",
+    module.recent.runtime_state_count() == 0
+    and module.recording.runtime_state_count() == 0
+    and module.recording.message_bus_subscription_count() == 0,
+    "Unregister left recent-action/recording runtime state behind",
 )
 
 # Updating an enabled add-on uses this disable/enable cycle. Verify that the

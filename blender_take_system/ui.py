@@ -2,7 +2,7 @@
 
 import bpy
 
-from . import engine, recent
+from . import engine, recent, recording
 
 
 def _take_row(scene, take_uuid):
@@ -115,14 +115,14 @@ class TS_UL_takes(bpy.types.UIList):
         row.label(text=str(len(item.overrides)), icon="DECORATE")
 
         record_indicator = row.row(align=True)
-        record_indicator.enabled = False
-        record_indicator.prop(
-            item,
-            "is_recording",
+        record_indicator.enabled = not item.is_main and applied
+        record_operator = record_indicator.operator(
+            "take_system.toggle_recording",
             text="",
             icon="REC",
-            toggle=True,
+            depress=bool(item.is_recording),
         )
+        record_operator.take_uuid = item.uuid
         row.label(
             text="",
             icon=(
@@ -293,6 +293,43 @@ class TS_PT_take_manager(bpy.types.Panel):
             icon="FILE_REFRESH",
         )
 
+        recording_box = layout.box()
+        recording_box.label(
+            text=recording.recording_status_text(scene),
+            icon="REC",
+        )
+        recording_row = recording_box.row(align=True)
+        recording_eligible = (
+            selected is not None
+            and not selected.is_main
+            and selected.uuid == state.active_take_uuid
+        )
+        recording_row.enabled = recording_eligible
+        toggle_recording = recording_row.operator(
+            "take_system.toggle_recording",
+            text=(
+                "Stop Recording"
+                if selected is not None and selected.is_recording
+                else "Start Recording"
+            ),
+            icon="REC",
+            depress=bool(selected is not None and selected.is_recording),
+        )
+        if selected is not None:
+            toggle_recording.take_uuid = selected.uuid
+        flush_row = recording_row.row(align=True)
+        flush_row.enabled = recording.active_take(scene) is not None
+        flush_row.operator(
+            "take_system.flush_recording",
+            text="Commit Pending",
+            icon="CHECKMARK",
+        )
+        if selected is not None and selected.uuid != state.active_take_uuid:
+            recording_box.label(
+                text="Apply the selected take before recording it.",
+                icon="INFO",
+            )
+
         recent_box = layout.box()
         recent_box.label(
             text=f"Recent: {recent.action_summary(scene)}",
@@ -303,6 +340,7 @@ class TS_PT_take_manager(bpy.types.Panel):
             selected is not None
             and not selected.is_main
             and selected.uuid == state.active_take_uuid
+            and recording.active_take(scene) is None
         )
         recent_row.scale_y = 1.15
         recent_row.operator(
@@ -313,6 +351,11 @@ class TS_PT_take_manager(bpy.types.Panel):
         if selected is not None and selected.uuid != state.active_take_uuid:
             recent_box.label(
                 text="Apply the selected take before capturing live changes.",
+                icon="INFO",
+            )
+        elif recording.active_take(scene) is not None:
+            recent_box.label(
+                text="Automatic recording will capture supported changes.",
                 icon="INFO",
             )
 
@@ -339,14 +382,6 @@ class TS_PT_take_manager(bpy.types.Panel):
                 text=f"Direct overrides: {len(selected.overrides)}",
                 icon="DECORATE",
             )
-
-        note = layout.row()
-        note.enabled = False
-        note.label(
-            text="Automatic record mode is reserved for Phase 6.",
-            icon="INFO",
-        )
-
 
 class TS_PT_take_scene_settings(bpy.types.Panel):
     """Camera and render-setting controls for the selected take."""

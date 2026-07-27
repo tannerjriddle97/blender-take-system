@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $workspace = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $sourceRoot = Join-Path $workspace "blender_take_system"
 if (-not $OutputPath) {
-    $OutputPath = Join-Path $workspace "dist\blender_take_system_phase_5.zip"
+    $OutputPath = Join-Path $workspace "dist\blender_take_system_phase_6.zip"
 }
 elseif (-not [System.IO.Path]::IsPathRooted($OutputPath)) {
     $OutputPath = Join-Path $workspace $OutputPath
@@ -28,6 +28,7 @@ $files = @(
     "model.py",
     "engine.py",
     "recent.py",
+    "recording.py",
     "operators.py",
     "ui.py",
     "README.md"

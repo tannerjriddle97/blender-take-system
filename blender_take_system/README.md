@@ -1,12 +1,13 @@
-# Blender Take System — Phases 1–5
+# Blender Take System — Phases 1–6
 
 This package is an installable Blender 4.0+ addon implementing the persistent
 take data model, manual override capture/resolve/apply engine, and dockable Take
-Manager. Version `0.5.0` adds inherited take cameras, a portable render-settings
-preset, per-take batch inclusion/output controls, and transactional batch still
-rendering. Every queued take is strictly applied and rendered, then the add-on
-restores the exact live take-written scene values and the original
-applied/selected Take Manager state—even when applying or rendering fails.
+Manager. Version `0.6.0` adds opt-in automatic recording for the applied
+non-Main take. Supported property edits are observed through the existing
+recent-action tracker, grouped into atomic override batches, and committed after
+a short quiet period. The Phase 5 inherited camera, portable render-settings
+preset, per-take batch controls, and transactional batch still rendering remain
+fully supported.
 
 Phase 5 retains v0.4.2's fast per-View-Layer collection enabled-state tracking:
 dirty-datablock indexes, direct cached LayerCollection readers, event-triggered
@@ -16,7 +17,7 @@ depths, sibling isolation, and atomic hierarchy resolution.
 
 ## Install
 
-Install `blender_take_system_phase_5.zip` with:
+Install `blender_take_system_phase_6.zip` with:
 
 1. **Edit → Preferences → Add-ons → Install from Disk**
 2. Select the ZIP.
@@ -30,9 +31,11 @@ initialize it lazily when displayed or when they receive a relevant
 dependency-graph update.
 
 Opening v0.4.x take data upgrades its schema in place without replacing existing
-takes or overrides. The new batch-output field starts blank and **Include in
+takes or overrides. Version 0.6.0 keeps persistent schema 2; automatic-record
+snapshots and status are runtime-only, while the resulting ordinary overrides
+save in the `.blend`. The batch-output field starts blank and **Include in
 Batch** defaults on, including for existing takes, so review those toggles before
-starting the first Phase 5 render queue.
+starting the first render queue.
 
 ## Open the Take Manager
 
@@ -233,6 +236,48 @@ ambiguous DATA-linked material-slot assignment are deliberately not treated as
 retroactive value overrides. Use the existing right-click or RNA path capture
 for an unsupported property.
 
+### Automatic recording
+
+Apply a non-Main take, then click its red record dot or press **Start
+Recording** in Take Manager. Version 0.6.0 reuses the same supported-property
+discovery and capture engine as **Apply Most Recent Action as Overrides**. It
+does not introduce a second override format or inheritance path.
+
+While recording is active:
+
+- supported edits are grouped for `0.45` seconds and committed as one atomic
+  override batch;
+- the value present when recording began is stored as the trusted Main baseline
+  when that logical property is first captured;
+- repeated changes to an existing take override update that record rather than
+  creating duplicates;
+- the status box reports a pending group, the most recently captured group, or
+  a failure;
+- **Commit Pending** immediately closes the current group, and stopping
+  recording or saving the `.blend` force-commits any pending supported edit.
+
+Dependency-graph observation remains the authoritative indexed change source.
+Blender's RNA message bus provides low-cost wakeups for common properties; if a
+message-bus signal is not followed by a dependency-graph callback, the timer
+performs one fallback observation. This preserves the existing changed-only and
+large-collection performance paths instead of polling every property
+continuously.
+
+Recording deliberately stops when another take is applied, after undo/redo, and
+after a file is loaded. Reapplying the same take keeps recording active and
+refreshes the observation baseline. Frame changes temporarily defer observation
+so animation evaluation is not mistaken for a user edit. Add-on operations
+commit any pending user group first, run under the existing internal-write
+guards, and then rebaseline, so take application, rendering, bootstrap, and
+other programmatic writes do not record themselves.
+
+If any member of a group is invalid at commit time, no member is written.
+Recording stops, the tracker rebaselines, and Take Manager displays the error.
+The supported and deliberately ignored property categories are identical to the
+manual recent-action workflow above. Automatic recording is a convenience over
+the generic override engine, not a universal Blender undo or geometry-diff
+system.
+
 ### Performance behavior in v0.4.2
 
 Persistent collection overrides still use full, auditable Scene RNA paths.
@@ -293,6 +338,12 @@ validated.
     Takes**. The batch returns to the exact pre-render live scene and manager
     state after all included stills finish.
 
+For the Phase 6 workflow, replace steps 2–4 or step 8 with **Start Recording**,
+make one or more supported edits, wait for the status to report the capture, and
+then stop recording. Use **Commit Pending** when an action must be stored
+immediately. Selecting a row does not redirect recording; only the currently
+applied non-Main take is eligible.
+
 Blender does not expose a generic previous-value history. If step 2 is skipped
 and the first capture happens only after editing, the addon cannot reconstruct
 the old Main value. In that case, switch to Main, restore/capture the intended
@@ -329,13 +380,19 @@ Object / Cube / ["finish_code"]
 Right-click capture generates Blender-safe paths automatically, including
 escaped node and modifier names.
 
-## Supported through v0.5.0
+## Supported through v0.6.0
 
 - Main-rooted, UUID-linked arbitrary take hierarchies
 - Stable UUID snapshots across Blender CollectionProperty growth and
   take duplication/deletion
 - Dockable Properties → Scene → Take Manager hierarchy
 - Separate selected and applied take states
+- Opt-in automatic recording on the applied non-Main take
+- Atomic 0.45-second action grouping with automatic Main-baseline seeding
+- Message-bus wakeups plus indexed dependency-graph observation and a guarded
+  fallback scan
+- Fail-closed recording lifecycle across take switches, undo/redo, frame
+  evaluation, load, save, and add-on-internal writes
 - Hierarchical per-take `Scene.camera` overrides with direct/inherited source
   display and explicit `None` support
 - Feature-detected, portable render-setting presets stored through ordinary
@@ -423,6 +480,13 @@ bpy.ops.take_system.render_included_takes()
   Manager's override inspector to audit and remove those records.
 - Some operator-backed or virtual UI controls expose no writable RNA button
   context; use the explicit path operator for those.
+- Blender does not expose a universal property-diff event. Automatic recording
+  therefore has the same curated property coverage as recent-action capture;
+  geometry/structure edits, selection/navigation, and animated or driven
+  evaluation are ignored.
+- A quiet-period timer commit does not create its own named Blender undo entry.
+  Undo/redo stops recording and rebaselines to prevent accidental recapture.
+  Use **Commit Pending** when an explicit operator/undo boundary is important.
 - Phase 5 batch rendering is synchronous and still-image only. It does not queue
   animation/video renders in the background, and `FFMPEG` is rejected.
 - Rendered files and newly created output directories are outside Blender's
@@ -437,11 +501,9 @@ bpy.ops.take_system.render_included_takes()
   even though `None` remains a valid stored camera override for variants that
   are not included.
 
-Phase 6 automatic recording is the next planned phase. JSON exchange and
-drag-and-drop are also not included. Take thumbnails/previews are deliberately
-deferred as a stretch goal until the capture, hierarchy, and render workflows
-are solid; Phase 5 performs no preview generation or background thumbnail
-maintenance. The manager's Record flag remains reserved for Phase 6.
+JSON exchange and drag-and-drop are not included. Take thumbnails/previews are
+deliberately deferred as a stretch goal; version 0.6.0 performs no preview
+generation or background thumbnail maintenance.
 
 The example script
 `C:\Codex_Playpen\blender-take-system\examples\take_system_phase_1_2_demo.py` creates three cubes
@@ -472,6 +534,10 @@ Blender automatically:
 
 & 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' `
   --background --factory-startup --python-exit-code 1 `
+  --python 'C:\Codex_Playpen\blender-take-system\tests\take_system_recording_test.py'
+
+& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' `
+  --background --factory-startup --python-exit-code 1 `
   --python 'C:\Codex_Playpen\blender-take-system\tests\take_system_phase5_test.py'
 
 & 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' `
@@ -487,9 +553,13 @@ The addon declares Blender 4.0+ compatibility. Automated runs have passed in
 Blender 5.1.2 and Blender 5.2.0 LTS; the declared minimum still needs a real
 Blender 4.x CI/manual lane. The all-tests script runs core, changed-only apply,
 CollectionProperty/UUID stability, hierarchy, Phase 5 camera/render/batch,
-operator, Take Manager, collection-state, recent-action, tracker
+operator, Take Manager, collection-state, recent-action, automatic-recording,
+tracker
 performance/behavior, save/reload, and isolated packaged-install functional
-lanes. Phase 5 coverage exercises camera inheritance, portable preset capture,
+lanes. Phase 6 coverage exercises eligibility, delayed and forced commits,
+grouped transforms, repeated updates, message-bus fallback, frame suppression,
+failure shutdown, save handling, same-take reapply, take switching, undo/redo,
+load, and teardown. Phase 5 coverage exercises camera inheritance, portable preset capture,
 output derivation/collision handling, whole-queue preflight, partial-render
 reporting, and exact restoration after success and injected failures. The
 packaged-install lane independently builds a multi-level hierarchy, verifies
