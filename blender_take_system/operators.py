@@ -23,6 +23,7 @@ CAPTURE_ID_TYPES = (
 _TAKE_ENUM_ITEMS_CACHE = {}
 _PARENT_ENUM_ITEMS_CACHE = {}
 _CAMERA_ENUM_ITEMS_CACHE = {}
+_LAST_SETTINGS_LAUNCH = {}
 
 
 def _scene_editability_error(context):
@@ -234,11 +235,13 @@ class TS_OT_initialize(bpy.types.Operator):
 
 
 class TS_OT_add_take(bpy.types.Operator):
-    """Add a new child of Main or the currently active take."""
+    """Add a child beneath the take highlighted in Take Manager."""
 
     bl_idname = "take_system.add_take"
     bl_label = "Add Take"
-    bl_description = "Add a take and make it active"
+    bl_description = (
+        "Add a child beneath the highlighted take and make the new take active"
+    )
     bl_options = {"REGISTER", "UNDO"}
 
     name: StringProperty(name="Name", default="Take")
@@ -253,7 +256,8 @@ class TS_OT_add_take(bpy.types.Operator):
             ),
             ("MAIN", "Main", "Create as a top-level child of Main"),
         ),
-        default="ACTIVE",
+        default="SELECTED",
+        options={"HIDDEN"},
     )
 
     @classmethod
@@ -267,6 +271,19 @@ class TS_OT_add_take(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
         return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "name")
+        selected = engine.selected_take(context.scene)
+        layout.label(
+            text=(
+                f"Parent: {selected.name}"
+                if selected is not None
+                else "Parent: <none>"
+            ),
+            icon="CON_CHILDOF",
+        )
 
     def execute(self, context):
         if not _prepare_recording_for_internal_change(self, context.scene):
@@ -447,12 +464,13 @@ class TS_OT_apply_selected_take(bpy.types.Operator):
 
 
 class TS_OT_duplicate_take(bpy.types.Operator):
-    """Duplicate one take's direct overrides as a sibling."""
+    """Duplicate one take and its descendants as a sibling subtree."""
 
     bl_idname = "take_system.duplicate_take"
     bl_label = "Duplicate Take"
     bl_description = (
-        "Duplicate the selected take and its direct overrides as a sibling"
+        "Duplicate the selected take, all descendants, and their local "
+        "settings as a sibling subtree"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -469,6 +487,9 @@ class TS_OT_duplicate_take(bpy.types.Operator):
         requested = self.take_uuid or (
             selected.uuid if selected is not None else ""
         )
+        copied_count = 1 + len(
+            engine.take_descendant_uuids(context.scene, requested)
+        )
         try:
             duplicate = engine.duplicate_take(
                 context.scene,
@@ -483,7 +504,10 @@ class TS_OT_duplicate_take(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
         recording.handle_internal_state_change(context.scene)
-        self.report({"INFO"}, f"Duplicated take as '{duplicate.name}'")
+        self.report(
+            {"INFO"},
+            f"Duplicated {copied_count} take(s) as '{duplicate.name}'",
+        )
         return {"FINISHED"}
 
 
@@ -862,14 +886,21 @@ def _camera_enum_items(_self, _context):
     if cached is not None and cached[0] == signature:
         return cached[1]
     items = [
-        ("NONE", "None", "Store no active camera", "X", 0),
+        (
+            "INHERIT",
+            "Inherit from Parent",
+            "Remove this take's direct camera and use its parent's camera",
+            "CON_CHILDOF",
+            0,
+        ),
+        ("NONE", "None", "Store no active camera", "X", 1),
         *[
             (
                 identifier,
                 name,
                 f"Use Camera object {name}",
                 "CAMERA_DATA",
-                index,
+                index + 1,
             )
             for index, (identifier, name) in enumerate(signature, start=1)
             if identifier
@@ -880,7 +911,7 @@ def _camera_enum_items(_self, _context):
 
 
 def _camera_from_enum(identifier):
-    if not identifier or identifier == "NONE":
+    if not identifier or identifier in {"INHERIT", "NONE"}:
         return None
     return next(
         (
@@ -891,6 +922,154 @@ def _camera_from_enum(identifier):
         ),
         None,
     )
+
+
+class TS_OT_open_take_settings(bpy.types.Operator):
+    """Open one row-targeted settings dialog with explicit take application."""
+
+    bl_idname = "take_system.open_take_settings"
+    bl_label = "Open Take Settings"
+    bl_options = {"REGISTER", "UNDO"}
+
+    take_uuid: StringProperty(options={"HIDDEN"})
+    settings_kind: EnumProperty(
+        name="Settings",
+        items=(
+            ("CAMERA", "Camera", "Choose the camera used by this take"),
+            (
+                "RENDER",
+                "Render",
+                "Edit this take's inherited render-setting groups",
+            ),
+        ),
+        options={"HIDDEN"},
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return _poll_editable_scene(cls, context)
+
+    @classmethod
+    def description(cls, _context, properties):
+        if properties.settings_kind == "CAMERA":
+            return (
+                "Choose this take's camera; applying the take is confirmed "
+                "first when it does not control the live scene"
+            )
+        return (
+            "Edit this take's render overrides; applying the take is "
+            "confirmed first when it does not control the live scene"
+        )
+
+    def _take(self, scene):
+        return engine.find_take(scene, self.take_uuid)
+
+    def _schedule_editor(self, context):
+        take_uuid = self.take_uuid
+        settings_kind = self.settings_kind
+        window = context.window
+        area = context.area
+        region = context.region
+        if window is not None:
+            for candidate in window.screen.areas:
+                candidate.tag_redraw()
+
+        def open_editor():
+            try:
+                windows = tuple(bpy.context.window_manager.windows)
+                if window not in windows:
+                    return None
+                override = {"window": window}
+                if any(candidate == area for candidate in window.screen.areas):
+                    override["area"] = area
+                    if any(
+                        candidate == region for candidate in area.regions
+                    ):
+                        override["region"] = region
+                with bpy.context.temp_override(**override):
+                    if settings_kind == "CAMERA":
+                        result = bpy.ops.take_system.configure_take_camera(
+                            "INVOKE_DEFAULT",
+                            take_uuid=take_uuid,
+                        )
+                    else:
+                        result = bpy.ops.take_system.edit_render_profile(
+                            "INVOKE_DEFAULT",
+                            take_uuid=take_uuid,
+                        )
+                _LAST_SETTINGS_LAUNCH.clear()
+                _LAST_SETTINGS_LAUNCH.update(
+                    {
+                        "take_uuid": take_uuid,
+                        "settings_kind": settings_kind,
+                        "result": frozenset(result),
+                    }
+                )
+            except (
+                engine.TakeSystemError,
+                AttributeError,
+                ReferenceError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                _LAST_SETTINGS_LAUNCH.clear()
+                _LAST_SETTINGS_LAUNCH["error"] = str(exc)
+                print(f"Take System: settings dialog could not open: {exc}")
+            return None
+
+        bpy.app.timers.register(open_editor, first_interval=0.01)
+        return {"FINISHED"}
+
+    def invoke(self, context, event):
+        take = self._take(context.scene)
+        if take is None:
+            self.report({"ERROR"}, "The take no longer exists")
+            return {"CANCELLED"}
+        if take.uuid == context.scene.take_system.active_take_uuid:
+            return self._schedule_editor(context)
+        return context.window_manager.invoke_confirm(self, event)
+
+    def draw(self, context):
+        take = self._take(context.scene)
+        if take is None:
+            self.layout.label(text="The take no longer exists.", icon="ERROR")
+            return
+        settings_label = (
+            "camera" if self.settings_kind == "CAMERA" else "render settings"
+        )
+        self.layout.label(
+            text=f"'{take.name}' is not applied.",
+            icon="INFO",
+        )
+        self.layout.label(
+            text=f"Apply it and edit its {settings_label}?",
+            icon="PLAY",
+        )
+        self.layout.label(
+            text="Applying changes the live scene state.",
+            icon="ERROR",
+        )
+
+    def execute(self, context):
+        take = self._take(context.scene)
+        if take is None:
+            self.report({"ERROR"}, "The take no longer exists")
+            return {"CANCELLED"}
+        if take.uuid != context.scene.take_system.active_take_uuid:
+            if not _prepare_recording_for_internal_change(self, context.scene):
+                return {"CANCELLED"}
+            try:
+                engine.apply_take(context.scene, take.uuid, strict=True)
+            except engine.TakeApplyError as exc:
+                first = exc.report.issues[0].summary()
+                self.report({"ERROR"}, f"Take could not be applied: {first}")
+                return {"CANCELLED"}
+            except engine.TakeSystemError as exc:
+                self.report({"ERROR"}, str(exc))
+                return {"CANCELLED"}
+            recording.handle_internal_state_change(context.scene)
+        return self._schedule_editor(context)
 
 
 class TS_OT_configure_take_camera(bpy.types.Operator):
@@ -913,15 +1092,25 @@ class TS_OT_configure_take_camera(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return _selected_applied_take(cls, context) is not None
+        return _poll_editable_scene(cls, context)
 
     def invoke(self, context, _event):
         selected = engine.selected_take(context.scene)
-        if selected is None:
+        requested = self.take_uuid or (
+            selected.uuid if selected is not None else ""
+        )
+        take = engine.find_take(context.scene, requested)
+        if take is None:
             self.report({"ERROR"}, "No take is selected")
             return {"CANCELLED"}
-        if not self.take_uuid:
-            self.take_uuid = selected.uuid
+        if take.uuid != context.scene.take_system.active_take_uuid:
+            self.report({"ERROR"}, "Apply the take before configuring it")
+            return {"CANCELLED"}
+        self.take_uuid = take.uuid
+        direct_camera = engine.direct_camera_override(context.scene, take)
+        if not take.is_main and direct_camera is None:
+            self.camera_choice = "INHERIT"
+            return context.window_manager.invoke_props_dialog(self)
         try:
             camera, _source_uuid = engine.resolved_camera(
                 context.scene,
@@ -953,6 +1142,34 @@ class TS_OT_configure_take_camera(bpy.types.Operator):
         if take.uuid != context.scene.take_system.active_take_uuid:
             self.report({"ERROR"}, "Apply the selected take first")
             return {"CANCELLED"}
+        if self.camera_choice == "INHERIT":
+            if take.is_main:
+                self.report({"ERROR"}, "Main cannot inherit a camera")
+                return {"CANCELLED"}
+            try:
+                if engine.direct_camera_override(context.scene, take) is None:
+                    self.report(
+                        {"INFO"},
+                        f"'{take.name}' already inherits its camera",
+                    )
+                    return {"FINISHED"}
+                engine.remove_take_camera(context.scene, take.uuid)
+            except engine.TakeApplyError as exc:
+                first = exc.report.issues[0].summary()
+                self.report(
+                    {"ERROR"},
+                    f"Camera inheritance could not be applied: {first}",
+                )
+                return {"CANCELLED"}
+            except engine.TakeSystemError as exc:
+                self.report({"ERROR"}, str(exc))
+                return {"CANCELLED"}
+            recording.handle_internal_state_change(context.scene)
+            self.report(
+                {"INFO"},
+                f"'{take.name}' now inherits its parent camera",
+            )
+            return {"FINISHED"}
         if self.camera_choice:
             chosen_camera = _camera_from_enum(self.camera_choice)
             if (
@@ -1972,6 +2189,13 @@ def clear_runtime_caches():
     _TAKE_ENUM_ITEMS_CACHE.clear()
     _PARENT_ENUM_ITEMS_CACHE.clear()
     _CAMERA_ENUM_ITEMS_CACHE.clear()
+    _LAST_SETTINGS_LAUNCH.clear()
+
+
+def last_settings_launch():
+    """Return diagnostic state for the most recent deferred row editor."""
+
+    return dict(_LAST_SETTINGS_LAUNCH)
 
 
 CLASSES = (
@@ -1988,6 +2212,7 @@ CLASSES = (
     TS_OT_capture_recent_action,
     TS_OT_toggle_recording,
     TS_OT_flush_recording,
+    TS_OT_open_take_settings,
     TS_OT_configure_take_camera,
     TS_OT_clear_take_camera,
     TS_OT_edit_render_profile,

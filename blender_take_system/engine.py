@@ -1091,8 +1091,28 @@ def _append_override_snapshot(take, snapshot, fresh_uuid):
     return override
 
 
+def _snapshot_take_for_duplication(take):
+    try:
+        camera_override = take.camera_override
+    except ReferenceError:
+        camera_override = None
+    return {
+        "uuid": take.uuid,
+        "name": take.name,
+        "parent_uuid": take.parent_uuid,
+        "include_in_render": bool(take.include_in_render),
+        "render_output_path": take.render_output_path,
+        "use_camera_override": bool(take.use_camera_override),
+        "camera_override": camera_override,
+        "overrides": tuple(
+            _snapshot_override_record(override)
+            for override in take.overrides
+        ),
+    }
+
+
 def duplicate_take(scene, take_uuid, make_active=True):
-    """Duplicate one take's local records as a sibling with fresh identities."""
+    """Duplicate one take subtree as a sibling with fresh identities."""
 
     source = find_take(scene, take_uuid)
     if source is None:
@@ -1100,61 +1120,100 @@ def duplicate_take(scene, take_uuid, make_active=True):
     if source.is_main:
         raise TakeHierarchyError("Main cannot be duplicated")
 
-    state = scene.take_system
-    # Snapshot every source value before growing the Take CollectionProperty;
-    # Blender may reallocate it and invalidate the previous item wrapper.
-    source_name = source.name
-    source_parent_uuid = source.parent_uuid
-    source_include_in_render = source.include_in_render
-    source_render_output_path = source.render_output_path
-    source_use_camera_override = source.use_camera_override
-    try:
-        source_camera_override = source.camera_override
-    except ReferenceError:
-        source_camera_override = None
-    source_override_snapshots = tuple(
-        _snapshot_override_record(source_override)
-        for source_override in source.overrides
+    take_chain(scene, source.uuid)
+    subtree_uuids = {
+        source.uuid,
+        *take_descendant_uuids(scene, source.uuid),
+    }
+    subtree_rows = tuple(
+        row
+        for row in take_hierarchy_rows(scene)
+        if row.take.uuid in subtree_uuids
     )
+    if len(subtree_rows) != len(subtree_uuids):
+        raise TakeHierarchyError(
+            "The selected subtree could not be traversed completely"
+        )
+    damaged = next((row for row in subtree_rows if row.issue), None)
+    if damaged is not None:
+        raise TakeHierarchyError(
+            f"Cannot duplicate damaged take '{damaged.take.name}': "
+            f"{damaged.issue}"
+        )
+
+    # Snapshot the complete subtree before growing the CollectionProperty;
+    # Blender may reallocate it and invalidate every existing item wrapper.
+    source_snapshots = tuple(
+        _snapshot_take_for_duplication(row.take)
+        for row in subtree_rows
+    )
+    source_root = source_snapshots[0]
+    if source_root["uuid"] != take_uuid:
+        raise TakeHierarchyError(
+            "The selected take is not the root of its displayed subtree"
+        )
+
+    state = scene.take_system
     previous_active_uuid = state.active_take_uuid
     previous_selected = selected_take(scene)
     previous_selected_uuid = (
         previous_selected.uuid if previous_selected is not None else ""
     )
-    duplicate = None
-    duplicate_uuid = ""
+    created_uuids = []
+    uuid_map = {}
+    duplicate_root_uuid = ""
     try:
-        duplicate = create_take(
-            scene,
-            name=f"{source_name} Copy",
-            parent_uuid=source_parent_uuid,
-            make_active=False,
-        )
-        duplicate_uuid = duplicate.uuid
-        duplicate.is_recording = False
-        duplicate.include_in_render = source_include_in_render
-        duplicate.render_output_path = source_render_output_path
-        duplicate.use_camera_override = source_use_camera_override
-        if source_camera_override is not None:
-            duplicate.camera_override = source_camera_override
-        for source_override_snapshot in source_override_snapshots:
-            _append_override_snapshot(
-                duplicate,
-                source_override_snapshot,
-                fresh_uuid=True,
+        for index, snapshot in enumerate(source_snapshots):
+            source_parent_uuid = snapshot["parent_uuid"]
+            parent_uuid = (
+                source_parent_uuid
+                if index == 0
+                else uuid_map.get(source_parent_uuid)
             )
+            if not parent_uuid:
+                raise TakeHierarchyError(
+                    f"Copied parent is unavailable for '{snapshot['name']}'"
+                )
+            duplicate = create_take(
+                scene,
+                name=(
+                    f"{snapshot['name']} Copy"
+                    if index == 0
+                    else snapshot["name"]
+                ),
+                parent_uuid=parent_uuid,
+                make_active=False,
+            )
+            duplicate_uuid = duplicate.uuid
+            created_uuids.append(duplicate_uuid)
+            uuid_map[snapshot["uuid"]] = duplicate_uuid
+            if index == 0:
+                duplicate_root_uuid = duplicate_uuid
+
+            duplicate.is_recording = False
+            duplicate.include_in_render = snapshot["include_in_render"]
+            duplicate.render_output_path = snapshot["render_output_path"]
+            duplicate.use_camera_override = snapshot["use_camera_override"]
+            if snapshot["camera_override"] is not None:
+                duplicate.camera_override = snapshot["camera_override"]
+            for override_snapshot in snapshot["overrides"]:
+                _append_override_snapshot(
+                    duplicate,
+                    override_snapshot,
+                    fresh_uuid=True,
+                )
 
         if make_active:
-            apply_take(scene, duplicate.uuid, strict=True)
+            apply_take(scene, duplicate_root_uuid, strict=True)
         else:
-            _sync_selected_index(state, duplicate.uuid)
+            _sync_selected_index(state, duplicate_root_uuid)
     except Exception:
-        if duplicate_uuid:
+        for created_uuid in reversed(created_uuids):
             duplicate_index = next(
                 (
                     index
                     for index, take in enumerate(state.takes)
-                    if take.uuid == duplicate_uuid
+                    if take.uuid == created_uuid
                 ),
                 None,
             )
@@ -1166,7 +1225,10 @@ def duplicate_take(scene, take_uuid, make_active=True):
             previous_selected_uuid or previous_active_uuid,
         )
         raise
-    return duplicate
+    duplicate_root = find_take(scene, duplicate_root_uuid)
+    if duplicate_root is None:
+        raise TakeHierarchyError("The duplicated subtree root is missing")
+    return duplicate_root
 
 
 def reparent_take(scene, take_uuid, parent_uuid):

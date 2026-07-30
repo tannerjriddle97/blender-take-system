@@ -57,8 +57,6 @@ release_types = (
     module.ui.TS_UL_overrides,
     module.ui.TS_PT_take_master_render,
     module.ui.TS_PT_take_manager,
-    module.ui.TS_PT_take_scene_settings,
-    module.ui.TS_PT_take_capture_changes,
     module.ui.TS_PT_take_batch_render,
     module.ui.TS_PT_take_overrides,
     module.operators.TS_OT_apply_selected_take,
@@ -70,6 +68,7 @@ release_types = (
     module.operators.TS_OT_capture_recent_action,
     module.operators.TS_OT_toggle_recording,
     module.operators.TS_OT_flush_recording,
+    module.operators.TS_OT_open_take_settings,
     module.operators.TS_OT_configure_take_camera,
     module.operators.TS_OT_clear_take_camera,
     module.operators.TS_OT_edit_render_profile,
@@ -94,8 +93,6 @@ require(
 require(
     module.ui.TS_PT_take_master_render.bl_order
     < module.ui.TS_PT_take_manager.bl_order
-    < module.ui.TS_PT_take_scene_settings.bl_order
-    < module.ui.TS_PT_take_capture_changes.bl_order
     < module.ui.TS_PT_take_batch_render.bl_order
     < module.ui.TS_PT_take_overrides.bl_order,
     "Installed panels do not follow the intended task hierarchy",

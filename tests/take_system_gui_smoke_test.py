@@ -29,6 +29,7 @@ RESULT = {
 }
 TARGET_AREA = None
 EXPECTED_FINGERPRINT = None
+SETTINGS_TARGET_UUID = ""
 
 
 def scene_fingerprint(scene):
@@ -80,7 +81,7 @@ def fail(exc):
 
 
 def setup():
-    global EXPECTED_FINGERPRINT, TARGET_AREA
+    global EXPECTED_FINGERPRINT, SETTINGS_TARGET_UUID, TARGET_AREA
     try:
         blender_take_system.register()
         if hasattr(bpy.context.preferences.view, "show_splash"):
@@ -116,6 +117,7 @@ def setup():
         )
         if scene.take_system.active_take_uuid != main.uuid:
             raise AssertionError("Selecting the GUI fixture child applied it")
+        SETTINGS_TARGET_UUID = child.uuid
         EXPECTED_FINGERPRINT = scene_fingerprint(scene)
 
         plan = engine.build_batch_plan(scene)
@@ -126,8 +128,6 @@ def setup():
             for panel in (
                 ui.TS_PT_take_master_render,
                 ui.TS_PT_take_manager,
-                ui.TS_PT_take_scene_settings,
-                ui.TS_PT_take_capture_changes,
                 ui.TS_PT_take_batch_render,
                 ui.TS_PT_take_overrides,
             )
@@ -136,6 +136,7 @@ def setup():
         if not all(
             operator.is_registered
             for operator in (
+                operators.TS_OT_open_take_settings,
                 operators.TS_OT_set_batch_inclusion,
                 operators.TS_OT_preflight_batch,
                 operators.TS_OT_render_included_takes,
@@ -182,7 +183,16 @@ def setup():
             }
         )
         bpy.app.timers.register(scroll_to_batch, first_interval=0.45)
-        if os.environ.get("TAKE_SYSTEM_GUI_REVIEW_DIALOG") == "1":
+        if os.environ.get("TAKE_SYSTEM_GUI_SETTINGS_DIALOG") == "1":
+            bpy.app.timers.register(open_settings, first_interval=0.8)
+            bpy.app.timers.register(
+                cancel_settings_confirmation,
+                first_interval=1.1,
+            )
+            bpy.app.timers.register(execute_settings, first_interval=1.35)
+            bpy.app.timers.register(verify_settings, first_interval=1.65)
+            bpy.app.timers.register(capture, first_interval=1.95)
+        elif os.environ.get("TAKE_SYSTEM_GUI_REVIEW_DIALOG") == "1":
             bpy.app.timers.register(open_review, first_interval=0.8)
             bpy.app.timers.register(capture, first_interval=1.25)
         else:
@@ -230,6 +240,92 @@ def open_review():
         if "RUNNING_MODAL" not in result:
             raise AssertionError(f"Review dialog did not open: {result}")
         RESULT["review_dialog"] = True
+    except Exception as exc:
+        return fail(exc)
+    return None
+
+
+def open_settings():
+    try:
+        region = next(
+            region
+            for region in TARGET_AREA.regions
+            if region.type == "WINDOW"
+        )
+        with bpy.context.temp_override(
+            window=bpy.context.window,
+            area=TARGET_AREA,
+            region=region,
+        ):
+            result = bpy.ops.take_system.open_take_settings(
+                "INVOKE_DEFAULT",
+                take_uuid=SETTINGS_TARGET_UUID,
+                settings_kind="CAMERA",
+            )
+        if "RUNNING_MODAL" not in result:
+            raise AssertionError(
+                f"Settings apply confirmation did not open: {result}"
+            )
+        RESULT["settings_confirmation"] = True
+    except Exception as exc:
+        return fail(exc)
+    return None
+
+
+def cancel_settings_confirmation():
+    try:
+        bpy.context.window.event_simulate(type="ESC", value="PRESS")
+        bpy.context.window.event_simulate(type="ESC", value="RELEASE")
+    except Exception as exc:
+        return fail(exc)
+    return None
+
+
+def execute_settings():
+    try:
+        region = next(
+            region
+            for region in TARGET_AREA.regions
+            if region.type == "WINDOW"
+        )
+        with bpy.context.temp_override(
+            window=bpy.context.window,
+            area=TARGET_AREA,
+            region=region,
+        ):
+            result = bpy.ops.take_system.open_take_settings(
+                "EXEC_DEFAULT",
+                take_uuid=SETTINGS_TARGET_UUID,
+                settings_kind="CAMERA",
+            )
+        if "FINISHED" not in result:
+            raise AssertionError(
+                f"Confirmed settings action did not finish: {result}"
+            )
+    except Exception as exc:
+        return fail(exc)
+    return None
+
+
+def verify_settings():
+    global EXPECTED_FINGERPRINT
+    try:
+        scene = bpy.context.scene
+        if scene.take_system.active_take_uuid != SETTINGS_TARGET_UUID:
+            raise AssertionError(
+                "Settings confirmation did not apply the requested take"
+            )
+        launch = operators.last_settings_launch()
+        if (
+            launch.get("take_uuid") != SETTINGS_TARGET_UUID
+            or launch.get("settings_kind") != "CAMERA"
+            or "RUNNING_MODAL" not in launch.get("result", ())
+        ):
+            raise AssertionError(
+                f"Camera settings dialog did not open: {launch}"
+            )
+        EXPECTED_FINGERPRINT = scene_fingerprint(scene)
+        RESULT["settings_dialog"] = True
     except Exception as exc:
         return fail(exc)
     return None

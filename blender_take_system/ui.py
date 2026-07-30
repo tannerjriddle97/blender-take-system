@@ -107,6 +107,69 @@ def _draw_render_profile_overview(layout, overview):
     )
 
 
+def _draw_capture_controls(layout, scene, selected):
+    state = scene.take_system
+    capture_box = layout.box()
+    capture_box.label(text="Capture Changes", icon="REC")
+    capture_box.label(
+        text=recording.recording_status_text(scene),
+        icon="REC",
+    )
+
+    recording_eligible = (
+        selected is not None
+        and not selected.is_main
+        and selected.uuid == state.active_take_uuid
+    )
+    recording_row = capture_box.row(align=True)
+    recording_row.enabled = recording_eligible
+    toggle_recording = recording_row.operator(
+        "take_system.toggle_recording",
+        text=(
+            "Stop Recording"
+            if selected is not None and selected.is_recording
+            else "Start Recording"
+        ),
+        icon="REC",
+        depress=bool(selected is not None and selected.is_recording),
+    )
+    if selected is not None:
+        toggle_recording.take_uuid = selected.uuid
+    flush_row = recording_row.row(align=True)
+    flush_row.enabled = recording.active_take(scene) is not None
+    flush_row.operator(
+        "take_system.flush_recording",
+        text="Commit Pending",
+        icon="CHECKMARK",
+    )
+
+    capture_box.separator()
+    capture_box.label(
+        text=f"Recent: {recent.action_summary(scene)}",
+        icon="RECOVER_LAST",
+    )
+    recent_row = capture_box.row()
+    recent_row.enabled = (
+        recording_eligible and recording.active_take(scene) is None
+    )
+    recent_row.operator(
+        "take_system.capture_recent_action",
+        text="Capture Most Recent Action",
+        icon="DECORATE_OVERRIDE",
+    )
+
+    if not recording_eligible:
+        capture_box.label(
+            text="Apply a non-Main take to capture changes.",
+            icon="INFO",
+        )
+    elif recording.active_take(scene) is not None:
+        capture_box.label(
+            text="Automatic recording captures supported changes.",
+            icon="INFO",
+        )
+
+
 class TS_UL_takes(bpy.types.UIList):
     """Depth-first hierarchy view backed by the scene's take collection."""
 
@@ -170,6 +233,24 @@ class TS_UL_takes(bpy.types.UIList):
             row.label(text="", icon="ERROR")
 
         row.label(text=str(len(item.overrides)), icon="DECORATE")
+        settings = row.row(align=True)
+        settings.enabled = not bool(issue)
+        camera = settings.operator(
+            "take_system.open_take_settings",
+            text="",
+            icon="CAMERA_DATA",
+            depress=engine.direct_camera_override(scene, item) is not None,
+        )
+        camera.take_uuid = item.uuid
+        camera.settings_kind = "CAMERA"
+        render = settings.operator(
+            "take_system.open_take_settings",
+            text="",
+            icon="PREFERENCES",
+            depress=engine.take_has_render_settings(scene, item),
+        )
+        render.take_uuid = item.uuid
+        render.settings_kind = "RENDER"
         row.prop(
             item,
             "include_in_render",
@@ -365,19 +446,12 @@ class TS_PT_take_manager(bpy.types.Panel):
             rows=6,
         )
 
-        toolbar = layout.row(align=True)
-        add_top = toolbar.operator(
+        add_take = layout.operator(
             "take_system.add_take",
-            text="Top-Level",
+            text="Add Take",
             icon="ADD",
         )
-        add_top.parent_mode = "MAIN"
-        add_child = toolbar.operator(
-            "take_system.add_take",
-            text="Child",
-            icon="CON_CHILDOF",
-        )
-        add_child.parent_mode = "SELECTED"
+        add_take.parent_mode = "SELECTED"
 
         editable = selected is not None and not selected.is_main
         edit_row = layout.row(align=True)
@@ -402,40 +476,7 @@ class TS_PT_take_manager(bpy.types.Panel):
             delete_operator.take_uuid = selected.uuid
             reparent_operator.take_uuid = selected.uuid
 
-        primary = layout.row(align=True)
-        primary.scale_y = 1.25
-        selected_is_applied = (
-            selected is not None and selected.uuid == state.active_take_uuid
-        )
-        if not selected_is_applied:
-            primary.operator(
-                "take_system.apply_selected_take",
-                text="Apply Selected Take",
-                icon="PLAY",
-            )
-        elif selected is not None and not selected.is_main:
-            edit_profile = primary.operator(
-                "take_system.edit_render_profile",
-                text="Edit Selected Render Settings...",
-                icon="OUTPUT",
-            )
-            edit_profile.take_uuid = selected.uuid
-        else:
-            primary.operator(
-                "take_system.apply_active_take",
-                text="Reapply Main",
-                icon="FILE_REFRESH",
-            )
-
-        reapply_slot = primary.row(align=True)
-        reapply_slot.enabled = selected_is_applied and (
-            selected is not None and not selected.is_main
-        )
-        reapply_slot.operator(
-            "take_system.apply_active_take",
-            text="Reapply",
-            icon="FILE_REFRESH",
-        )
+        _draw_capture_controls(layout, scene, selected)
 
 
 class TS_PT_take_scene_settings(bpy.types.Panel):
@@ -713,7 +754,7 @@ class TS_PT_take_batch_render(bpy.types.Panel):
     bl_space_type = "PROPERTIES"
     bl_region_type = "WINDOW"
     bl_context = "scene"
-    bl_order = 93
+    bl_order = 91
     bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
@@ -992,7 +1033,7 @@ class TS_PT_take_overrides(bpy.types.Panel):
     bl_space_type = "PROPERTIES"
     bl_region_type = "WINDOW"
     bl_context = "scene"
-    bl_order = 94
+    bl_order = 92
     bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
@@ -1053,8 +1094,6 @@ CLASSES = (
     TS_UL_overrides,
     TS_PT_take_master_render,
     TS_PT_take_manager,
-    TS_PT_take_scene_settings,
-    TS_PT_take_capture_changes,
     TS_PT_take_batch_render,
     TS_PT_take_overrides,
 )

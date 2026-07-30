@@ -53,7 +53,7 @@ try:
 
     created_uuids = []
     for index in range(128):
-        parent_uuid = source_uuid if index % 3 == 0 else main_uuid
+        parent_uuid = main_uuid
         created = engine.create_take(
             scene,
             f"Stable Child {index:03d}",

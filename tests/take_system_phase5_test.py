@@ -454,6 +454,30 @@ try:
         and child.camera_override == camera_child,
         "Canonical camera record did not synchronize UI metadata",
     )
+    inherit_result = bpy.ops.take_system.configure_take_camera(
+        "EXEC_DEFAULT",
+        take_uuid=child_uuid,
+        camera_choice="INHERIT",
+    )
+    child = engine.find_take(scene, child_uuid)
+    require(
+        inherit_result == {"FINISHED"}
+        and engine.direct_camera_override(scene, child) is None
+        and not child.use_camera_override
+        and child.camera_override is None
+        and scene.camera == camera_parent,
+        f"Camera inheritance choice failed: {inherit_result}",
+    )
+    operator_result = bpy.ops.take_system.configure_take_camera(
+        "EXEC_DEFAULT",
+        take_uuid=child_uuid,
+        camera_choice=operators._camera_enum_identifier(camera_child),
+    )
+    require(
+        operator_result == {"FINISHED"} and scene.camera == camera_child,
+        f"Camera operator did not restore a direct choice: {operator_result}",
+    )
+    child = engine.find_take(scene, child_uuid)
     generic_camera_record = engine.direct_camera_override(scene, child)
     engine.remove_override(
         scene,

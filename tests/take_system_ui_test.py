@@ -146,20 +146,19 @@ try:
         "Apply-selected did not resolve B's inherited Main value",
     )
 
-    # Add Child is specifically driven by the manager selection, not by a
+    # Add Take is specifically driven by the manager selection, not by a
     # separately applied take UUID.
     state.active_take_index = take_index(scene, take_b_uuid)
     result = bpy.ops.take_system.add_take(
         "EXEC_DEFAULT",
         name="B Child",
-        parent_mode="SELECTED",
     )
-    require(result == {"FINISHED"}, f"Add-child operator failed: {result}")
+    require(result == {"FINISHED"}, f"Add Take operator failed: {result}")
     take_b_child = engine.active_take(scene)
     take_b_child_uuid = take_b_child.uuid
     require(
         take_b_child.parent_uuid == take_b_uuid,
-        "Add Child did not use the UI-selected take as its parent",
+        "Add Take did not use the UI-selected take as its parent",
     )
 
     # Add A's child after B's child. Collection order now differs from tree
@@ -171,14 +170,31 @@ try:
         make_active=False,
     )
     take_a_child_uuid = take_a_child.uuid
+    take_a_child.include_in_render = False
+    take_a_child.render_output_path = "//renders/a_child"
+    take_a_grandchild = engine.create_take(
+        scene,
+        name="A Grandchild",
+        parent_uuid=take_a_child_uuid,
+        make_active=False,
+    )
+    take_a_grandchild_uuid = take_a_grandchild.uuid
+    take_a_grandchild.render_output_path = "//renders/a_grandchild"
     rows = engine.take_hierarchy_rows(scene)
     require(
         [row.take.name for row in rows]
-        == ["Main", "A", "A Child", "B", "B Child"],
+        == [
+            "Main",
+            "A",
+            "A Child",
+            "A Grandchild",
+            "B",
+            "B Child",
+        ],
         "Take Manager hierarchy is not stable depth-first preorder",
     )
     require(
-        [row.depth for row in rows] == [0, 1, 2, 1, 2],
+        [row.depth for row in rows] == [0, 1, 2, 3, 1, 2],
         "Take Manager hierarchy depths are incorrect",
     )
     require(
@@ -186,8 +202,9 @@ try:
         "A valid hierarchy was reported as damaged",
     )
 
-    # Duplicating copies only the selected take's local records. Stable target
-    # references remain shared while take and override identities are fresh.
+    # Duplicating copies the complete selected subtree. Stable target
+    # references remain shared while take, child, and override identities are
+    # fresh.
     take_a = engine.find_take(scene, take_a_uuid)
     source_override = take_a.overrides[0]
     source_override_uuid = source_override.uuid
@@ -221,9 +238,33 @@ try:
         duplicate_override.target_id.as_pointer() == source_target_pointer,
         "Duplicate did not preserve the referenced target datablock",
     )
+    duplicate_children = [
+        take for take in state.takes if take.parent_uuid == duplicate_uuid
+    ]
     require(
-        not any(take.parent_uuid == duplicate_uuid for take in state.takes),
-        "Duplicate unexpectedly copied the source's child hierarchy",
+        len(duplicate_children) == 1,
+        "Duplicate did not copy the source's child hierarchy",
+    )
+    duplicate_child = duplicate_children[0]
+    require(
+        duplicate_child.uuid != take_a_child_uuid
+        and duplicate_child.parent_uuid == duplicate_uuid
+        and not duplicate_child.include_in_render
+        and duplicate_child.render_output_path == "//renders/a_child",
+        "Duplicated child identity, parent, or local metadata is incorrect",
+    )
+    duplicate_grandchildren = [
+        take
+        for take in state.takes
+        if take.parent_uuid == duplicate_child.uuid
+    ]
+    require(
+        len(duplicate_grandchildren) == 1
+        and duplicate_grandchildren[0].uuid != take_a_grandchild_uuid
+        and duplicate_grandchildren[0].parent_uuid == duplicate_child.uuid
+        and duplicate_grandchildren[0].render_output_path
+        == "//renders/a_grandchild",
+        "Duplicate did not recursively remap the grandchild hierarchy",
     )
     require(
         control.hide_render,
@@ -397,8 +438,6 @@ try:
         ui.TS_UL_overrides,
         ui.TS_PT_take_master_render,
         ui.TS_PT_take_manager,
-        ui.TS_PT_take_scene_settings,
-        ui.TS_PT_take_capture_changes,
         ui.TS_PT_take_batch_render,
         ui.TS_PT_take_overrides,
     ):
@@ -415,15 +454,11 @@ try:
     require(
         ui.TS_PT_take_master_render.bl_order
         < ui.TS_PT_take_manager.bl_order
-        < ui.TS_PT_take_scene_settings.bl_order
-        < ui.TS_PT_take_capture_changes.bl_order
         < ui.TS_PT_take_batch_render.bl_order
         < ui.TS_PT_take_overrides.bl_order,
         "Take System panels do not follow the intended task hierarchy",
     )
     for panel in (
-        ui.TS_PT_take_scene_settings,
-        ui.TS_PT_take_capture_changes,
         ui.TS_PT_take_batch_render,
         ui.TS_PT_take_overrides,
     ):
@@ -431,6 +466,17 @@ try:
             "DEFAULT_CLOSED" in panel.bl_options,
             f"{panel.__name__} does not use progressive disclosure",
         )
+    require(
+        "Add Take" in ui.TS_PT_take_manager.draw.__code__.co_consts
+        and "Top-Level" not in ui.TS_PT_take_manager.draw.__code__.co_consts
+        and "Child" not in ui.TS_PT_take_manager.draw.__code__.co_consts,
+        "Take Manager does not expose one selection-driven Add Take action",
+    )
+    require(
+        "take_system.open_take_settings"
+        in ui.TS_UL_takes.draw_item.__code__.co_consts,
+        "Take rows do not expose camera/render settings launchers",
+    )
     for operator_class in (
         operators.TS_OT_apply_selected_take,
         operators.TS_OT_duplicate_take,
@@ -438,6 +484,7 @@ try:
         operators.TS_OT_reparent_take,
         operators.TS_OT_remove_override,
         operators.TS_OT_open_manager,
+        operators.TS_OT_open_take_settings,
         operators.TS_OT_configure_take_camera,
         operators.TS_OT_clear_take_camera,
         operators.TS_OT_edit_render_profile,

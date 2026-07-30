@@ -34,7 +34,8 @@ function Invoke-TakeSystemGuiSmoke {
         [int]$Width,
         [int]$Height,
         [bool]$UseExistingProperties,
-        [bool]$OpenReviewDialog
+        [bool]$OpenReviewDialog,
+        [bool]$OpenSettingsDialog
     )
 
     $screenshot = Join-Path $testRoot "take_system_gui_$Name.png"
@@ -52,6 +53,12 @@ function Invoke-TakeSystemGuiSmoke {
     }
     else {
         Remove-Item Env:TAKE_SYSTEM_GUI_REVIEW_DIALOG -ErrorAction SilentlyContinue
+    }
+    if ($OpenSettingsDialog) {
+        $env:TAKE_SYSTEM_GUI_SETTINGS_DIALOG = "1"
+    }
+    else {
+        Remove-Item Env:TAKE_SYSTEM_GUI_SETTINGS_DIALOG -ErrorAction SilentlyContinue
     }
 
     $process = Start-Process `
@@ -100,24 +107,35 @@ try {
         -Width 1400 `
         -Height 900 `
         -UseExistingProperties $false `
-        -OpenReviewDialog $false
+        -OpenReviewDialog $false `
+        -OpenSettingsDialog $false
     Invoke-TakeSystemGuiSmoke `
         -Name "narrow" `
         -Width 1920 `
         -Height 1000 `
         -UseExistingProperties $true `
-        -OpenReviewDialog $false
+        -OpenReviewDialog $false `
+        -OpenSettingsDialog $false
     Invoke-TakeSystemGuiSmoke `
         -Name "review" `
         -Width 1400 `
         -Height 900 `
         -UseExistingProperties $false `
-        -OpenReviewDialog $true
+        -OpenReviewDialog $true `
+        -OpenSettingsDialog $false
+    Invoke-TakeSystemGuiSmoke `
+        -Name "settings" `
+        -Width 1400 `
+        -Height 900 `
+        -UseExistingProperties $false `
+        -OpenReviewDialog $false `
+        -OpenSettingsDialog $true
 }
 finally {
     Remove-Item Env:TAKE_SYSTEM_GUI_SCREENSHOT -ErrorAction SilentlyContinue
     Remove-Item Env:TAKE_SYSTEM_GUI_USE_EXISTING -ErrorAction SilentlyContinue
     Remove-Item Env:TAKE_SYSTEM_GUI_REVIEW_DIALOG -ErrorAction SilentlyContinue
+    Remove-Item Env:TAKE_SYSTEM_GUI_SETTINGS_DIALOG -ErrorAction SilentlyContinue
 }
 
 Write-Output "TAKE_SYSTEM_ALL_GUI_TESTS_OK"

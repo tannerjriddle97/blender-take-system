@@ -105,10 +105,10 @@ try:
         )
     require(
         "take_system.toggle_recording"
-        in ui.TS_PT_take_capture_changes.draw.__code__.co_consts
+        in ui._draw_capture_controls.__code__.co_consts
         and "recording_status_text"
-        in ui.TS_PT_take_capture_changes.draw.__code__.co_names,
-        "Capture Changes does not expose recording controls/status",
+        in ui._draw_capture_controls.__code__.co_names,
+        "Take Manager does not expose recording controls/status",
     )
 
     scene = bpy.context.scene
